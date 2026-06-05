@@ -1,0 +1,11 @@
+build/
+output/
+rk_media_sdk/
+*.o
+*.so
+*.a
+*.yuv
+*.pcm
+*.wav
+*.h264
+*.h265
