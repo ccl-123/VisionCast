@@ -1,0 +1,13 @@
+{
+  "video": {
+    "source": "usb_c270",
+    "fallback_source": "",
+    "device": "/dev/video21",
+    "fallback_device": "",
+    "fallback_format": "",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "format": "MJPEG"
+  }
+}

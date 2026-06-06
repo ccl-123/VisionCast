@@ -1,0 +1,13 @@
+{
+  "video": {
+    "source": "mipi_13855",
+    "fallback_source": "usb_c270",
+    "device": "/dev/video11",
+    "fallback_device": "/dev/video21",
+    "fallback_format": "MJPEG",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "format": "NV12"
+  }
+}
