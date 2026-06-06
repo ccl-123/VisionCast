@@ -1,0 +1,390 @@
+#include "transport/webrtc_pusher.h"
+
+#include <algorithm>
+#include <condition_variable>
+#include <cstddef>
+#include <cstring>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <utility>
+
+#include <netdb.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "common/log.h"
+
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+#include "rtc/rtc.hpp"
+#endif
+
+namespace visioncast {
+namespace {
+
+constexpr std::uint32_t kVideoSsrc = 0x56435631U;
+constexpr std::uint32_t kAudioSsrc = 0x56434131U;
+constexpr int kVideoPayloadType = 96;
+constexpr int kAudioPayloadType = 8;
+
+struct ParsedHttpUrl {
+    std::string host;
+    std::string port = "80";
+    std::string path = "/";
+};
+
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+bool parse_http_url(const std::string& url, ParsedHttpUrl& parsed, std::string& error) {
+    constexpr const char* scheme = "http://";
+    if (url.rfind(scheme, 0) != 0) {
+        error = "WebRTC WHIP currently supports plain http:// URLs only: " + url;
+        return false;
+    }
+
+    const std::size_t authority_start = std::strlen(scheme);
+    const std::size_t path_start = url.find('/', authority_start);
+    const std::string authority =
+        url.substr(authority_start, path_start == std::string::npos
+                                        ? std::string::npos
+                                        : path_start - authority_start);
+    if (authority.empty()) {
+        error = "invalid WHIP URL host: " + url;
+        return false;
+    }
+    parsed.path = path_start == std::string::npos ? "/" : url.substr(path_start);
+
+    const std::size_t colon = authority.rfind(':');
+    if (colon != std::string::npos && colon + 1 < authority.size()) {
+        parsed.host = authority.substr(0, colon);
+        parsed.port = authority.substr(colon + 1);
+    } else {
+        parsed.host = authority;
+    }
+    if (parsed.host.empty() || parsed.port.empty()) {
+        error = "invalid WHIP URL endpoint: " + url;
+        return false;
+    }
+    return true;
+}
+
+std::string trim_cr(std::string line) {
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    return line;
+}
+
+bool parse_http_response(const std::string& response, int& status, std::string& body, std::string& error) {
+    const std::size_t header_end = response.find("\r\n\r\n");
+    if (header_end == std::string::npos) {
+        error = "WHIP response did not contain HTTP headers";
+        return false;
+    }
+
+    std::istringstream headers(response.substr(0, header_end));
+    std::string status_line;
+    if (!std::getline(headers, status_line)) {
+        error = "WHIP response status line is empty";
+        return false;
+    }
+    status_line = trim_cr(status_line);
+    std::istringstream status_stream(status_line);
+    std::string version;
+    status_stream >> version >> status;
+    if (version.rfind("HTTP/", 0) != 0 || status <= 0) {
+        error = "invalid WHIP HTTP status line: " + status_line;
+        return false;
+    }
+    body = response.substr(header_end + 4);
+    return true;
+}
+
+bool http_post_sdp(const std::string& url,
+                   const std::string& offer_sdp,
+                   std::string& answer_sdp,
+                   std::string& error) {
+    ParsedHttpUrl endpoint;
+    if (!parse_http_url(url, endpoint, error)) {
+        return false;
+    }
+
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* results = nullptr;
+    const int gai = getaddrinfo(endpoint.host.c_str(), endpoint.port.c_str(), &hints, &results);
+    if (gai != 0) {
+        error = std::string("resolve WHIP host: ") + gai_strerror(gai);
+        return false;
+    }
+
+    int fd = -1;
+    for (addrinfo* it = results; it != nullptr; it = it->ai_next) {
+        fd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+        if (connect(fd, it->ai_addr, it->ai_addrlen) == 0) {
+            break;
+        }
+        close(fd);
+        fd = -1;
+    }
+    freeaddrinfo(results);
+    if (fd < 0) {
+        error = "connect WHIP endpoint failed: " + endpoint.host + ":" + endpoint.port;
+        return false;
+    }
+
+    std::ostringstream request;
+    request << "POST " << endpoint.path << " HTTP/1.1\r\n"
+            << "Host: " << endpoint.host << ":" << endpoint.port << "\r\n"
+            << "Content-Type: application/sdp\r\n"
+            << "Accept: application/sdp\r\n"
+            << "Connection: close\r\n"
+            << "Content-Length: " << offer_sdp.size() << "\r\n\r\n"
+            << offer_sdp;
+    const std::string bytes = request.str();
+
+    std::size_t sent = 0;
+    while (sent < bytes.size()) {
+        const ssize_t ret = send(fd, bytes.data() + sent, bytes.size() - sent, 0);
+        if (ret <= 0) {
+            error = "send WHIP offer failed";
+            close(fd);
+            return false;
+        }
+        sent += static_cast<std::size_t>(ret);
+    }
+
+    std::string response;
+    char buffer[4096];
+    for (;;) {
+        const ssize_t ret = recv(fd, buffer, sizeof(buffer), 0);
+        if (ret < 0) {
+            error = "receive WHIP answer failed";
+            close(fd);
+            return false;
+        }
+        if (ret == 0) {
+            break;
+        }
+        response.append(buffer, buffer + ret);
+    }
+    close(fd);
+
+    int status = 0;
+    if (!parse_http_response(response, status, answer_sdp, error)) {
+        return false;
+    }
+    if (status < 200 || status >= 300 || answer_sdp.empty()) {
+        error = "WHIP server returned HTTP " + std::to_string(status);
+        return false;
+    }
+    return true;
+}
+
+std::string pc_state_text(rtc::PeerConnection::State state) {
+    std::ostringstream out;
+    out << state;
+    return out.str();
+}
+#endif
+
+}  // namespace
+
+struct WebRtcPusher::Impl {
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+    std::shared_ptr<rtc::PeerConnection> pc;
+    std::shared_ptr<rtc::Track> video_track;
+    std::shared_ptr<rtc::Track> audio_track;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool gathering_done = false;
+    bool connected = false;
+    bool failed = false;
+    std::string local_sdp;
+    std::string state_error;
+#endif
+    bool opened = false;
+};
+
+WebRtcPusher::WebRtcPusher(std::string whip_url, VideoConfig video, AudioConfig audio)
+    : impl_(std::make_unique<Impl>()),
+      whip_url_(std::move(whip_url)),
+      video_(std::move(video)),
+      audio_(std::move(audio)) {}
+
+WebRtcPusher::~WebRtcPusher() {
+    disconnect();
+}
+
+bool WebRtcPusher::connect(std::string& error) {
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+    if (impl_->opened) {
+        return true;
+    }
+
+    try {
+        rtc::Configuration config;
+        config.disableAutoNegotiation = true;
+        config.forceMediaTransport = true;
+        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+
+        impl_->pc = std::make_shared<rtc::PeerConnection>(config);
+        impl_->pc->onStateChange([this](rtc::PeerConnection::State state) {
+            std::lock_guard<std::mutex> lock(impl_->mutex);
+            if (state == rtc::PeerConnection::State::Connected) {
+                impl_->connected = true;
+            } else if (state == rtc::PeerConnection::State::Failed ||
+                       state == rtc::PeerConnection::State::Closed) {
+                impl_->failed = true;
+                impl_->state_error = "WebRTC PeerConnection state=" + pc_state_text(state);
+            }
+            impl_->cv.notify_all();
+        });
+        impl_->pc->onGatheringStateChange([this](rtc::PeerConnection::GatheringState state) {
+            if (state != rtc::PeerConnection::GatheringState::Complete) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(impl_->mutex);
+            auto description = impl_->pc->localDescription();
+            if (description) {
+                impl_->local_sdp = std::string(description.value());
+            }
+            impl_->gathering_done = true;
+            impl_->cv.notify_all();
+        });
+
+        rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
+        video.addH264Codec(kVideoPayloadType);
+        video.addSSRC(kVideoSsrc, "video", "visioncast", "video");
+        impl_->video_track = impl_->pc->addTrack(video);
+
+        rtc::Description::Audio audio("audio", rtc::Description::Direction::SendOnly);
+        audio.addPCMACodec(kAudioPayloadType);
+        audio.addSSRC(kAudioSsrc, "audio", "visioncast", "audio");
+        impl_->audio_track = impl_->pc->addTrack(audio);
+
+        impl_->pc->setLocalDescription(rtc::Description::Type::Offer);
+        {
+            std::unique_lock<std::mutex> lock(impl_->mutex);
+            const bool ready = impl_->cv.wait_for(lock, std::chrono::seconds(10), [this] {
+                return impl_->gathering_done || impl_->failed;
+            });
+            if (!ready || impl_->local_sdp.empty()) {
+                error = "WebRTC ICE gathering timed out before WHIP POST";
+                disconnect();
+                return false;
+            }
+            if (impl_->failed) {
+                error = impl_->state_error;
+                disconnect();
+                return false;
+            }
+        }
+
+        std::string answer_sdp;
+        if (!http_post_sdp(whip_url_, impl_->local_sdp, answer_sdp, error)) {
+            disconnect();
+            return false;
+        }
+        impl_->pc->setRemoteDescription(rtc::Description(answer_sdp, "answer"));
+
+        {
+            std::unique_lock<std::mutex> lock(impl_->mutex);
+            impl_->cv.wait_for(lock, std::chrono::seconds(10), [this] {
+                return impl_->connected || impl_->failed;
+            });
+            if (impl_->failed) {
+                error = impl_->state_error;
+                disconnect();
+                return false;
+            }
+        }
+
+        impl_->opened = true;
+        VC_LOG_INFO("webrtc", "WHIP session established: " + whip_url_);
+        return true;
+    } catch (const std::exception& ex) {
+        error = std::string("WebRTC connect failed: ") + ex.what();
+        disconnect();
+        return false;
+    }
+#else
+    error = "WebRTC WHIP support is not enabled; build 3rdparty/webrtc first";
+    return false;
+#endif
+}
+
+void WebRtcPusher::disconnect() {
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+    if (impl_->pc) {
+        impl_->pc->close();
+    }
+    impl_->video_track.reset();
+    impl_->audio_track.reset();
+    impl_->pc.reset();
+    {
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->gathering_done = false;
+        impl_->connected = false;
+        impl_->failed = false;
+        impl_->local_sdp.clear();
+        impl_->state_error.clear();
+    }
+#endif
+    impl_->opened = false;
+}
+
+bool WebRtcPusher::push_video_rtp(const std::vector<RtpPacket>& packets, std::string& error) {
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+    if (!impl_->opened || !impl_->video_track) {
+        error = "WebRTC video track is not open";
+        return false;
+    }
+    if (!impl_->video_track->isOpen()) {
+        return true;
+    }
+    for (const auto& packet : packets) {
+        if (!packet.bytes.empty() &&
+            !impl_->video_track->send(reinterpret_cast<const rtc::byte*>(packet.bytes.data()),
+                                      packet.bytes.size())) {
+            error = "WebRTC video RTP send was buffered or dropped";
+            return false;
+        }
+    }
+    return true;
+#else
+    (void)packets;
+    error = "WebRTC WHIP support is not enabled";
+    return false;
+#endif
+}
+
+bool WebRtcPusher::push_audio_rtp(const std::vector<RtpPacket>& packets, std::string& error) {
+#if defined(VISIONCAST_ENABLE_WEBRTC)
+    if (!impl_->opened || !impl_->audio_track) {
+        error = "WebRTC audio track is not open";
+        return false;
+    }
+    if (!impl_->audio_track->isOpen()) {
+        return true;
+    }
+    for (const auto& packet : packets) {
+        if (!packet.bytes.empty() &&
+            !impl_->audio_track->send(reinterpret_cast<const rtc::byte*>(packet.bytes.data()),
+                                      packet.bytes.size())) {
+            error = "WebRTC audio RTP send was buffered or dropped";
+            return false;
+        }
+    }
+    return true;
+#else
+    (void)packets;
+    error = "WebRTC WHIP support is not enabled";
+    return false;
+#endif
+}
+
+}  // namespace visioncast
