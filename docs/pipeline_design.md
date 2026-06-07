@@ -98,18 +98,38 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 
 ---
 
-## 9. 传输协议设计
+## 9. 传输协议、数据链路与数据压缩格式设计
 
-### 9.1 WebRTC (WHIP)
-- **实现**：链接 `libdatachannel` 建立 PeerConnection 传输音视频流。
-- **环回优化**：本地/回环测试时，将 libdatachannel 套接字强制绑定到 `127.0.0.1` 物理回环；同时，将 SDP Offer 字符串中的 `a=setup:actpass` 强制覆写为 `a=setup:active`，强迫客户端主动发出 `ClientHello` 以进行 DTLS 协商，彻底解决了 Pion/MediaMTX 环境下的 DTLS 握手超时问题。
+### 9.1 WebRTC (WHIP / WHEP)
+- **物理实现**：链接 `libdatachannel` 建立 PeerConnection 传输音视频流，客户端通过 HTTP POST 向 WHIP 服务端推送 SDP Offer。
+- **回环与握手优化**：本地/回环测试时，将 libdatachannel 套接字强制绑定到 `127.0.0.1` 物理回环；同时，将 SDP Offer 中的 `a=setup:actpass` 强制覆写为 `a=setup:active`，强迫客户端主动发出 `ClientHello` 以进行 DTLS 协商，将 DTLS 协商延时控制在 5ms 级。
+- **音视频数据链路**：
+  - **视频链路**：`13855 MIPI CSI 采集 (/dev/video11)` -> `RgaProcessor NV12格式转换` -> `MppEncoder H.264硬编码` -> `libdatachannel封装为RTP并以SRTP加密发送` -> `主机MediaMTX接收` -> `浏览器 WHEP 播放`。
+  - **音频链路**：`nau8822 hw:1,0 采集 (48kHz S16_LE)` -> `AudioCapture均值混音(单声道 PCM)` -> `AudioEncoder降采样并编码为G.711A (PCMA)` -> `libdatachannel封装为SRTP加密发送` -> `主机MediaMTX` -> `浏览器 WHEP 播放`。
+- **数据压缩规格**：
+  - **视频**：H.264 Baseline Profile，完全禁用 B 帧，CBR 控制，GOP=30。
+  - **音频**：G.711A (PCMA)，采样率降频为 8000Hz，单声道 (Mono)，8-bit，码率 64 kbps。
 
 ### 9.2 RTMP
-- **实现**：采用 FFmpeg 动态加载库方式，将 H.264 NAL 字节流封装为 AVCC 长度前缀格式，推送至目的流媒体服务器端口。
+- **物理实现**：采用 FFmpeg 动态加载库 (`libavformat.so` 等) 建立 RTMP 传输层通道，向指定的 RTMP 服务端发布流。
+- **字节流重组**：在发送前由 `RtmpPusher` 拦截 MPP 产生的 Annex-B NAL 字节流，切分并剥离 `0x00000001` 起始码，重组为符合 FLV 规范的 AVCC 4字节长度前缀数据包后写入封装器。
+- **音视频数据链路**：
+  - **视频链路**：`13855 MIPI CSI 采集` -> `RgaProcessor转换` -> `MppEncoder H.264编码` -> `RtmpPusher转换为AVCC包` -> `FFmpeg FLV容器封装` -> `RTMP over TCP推送` -> `主机MediaMTX` -> `ffplay拉流`。
+  - **音频链路**：`nau8822 hw:1,0 采集` -> `均值混音单声道 PCM` -> `FFmpeg重采样并软编码为AAC-LC` -> `FLV容器封装` -> `RTMP over TCP推送` -> `主机MediaMTX` -> `ffplay拉流`。
+- **数据压缩规格**：
+  - **视频**：H.264 Baseline Profile，AVCC 格式封装。
+  - **音频**：AAC-LC (Advanced Audio Coding Low Complexity)，采样率 48000Hz，单声道，16-bit 深度。
 
 ### 9.3 RTP over UDP
-- **实现**：音视频 RTP 包直接通过裸 UDP 向目标接收端口投递，并在运行时自动在工作目录生成对应的播放描述文件 `test.sdp`。
-- **空挂断容错**：在 `UdpSender::send` 中对套接字 `ECONNREFUSED` 异常进行拦截和日志屏蔽，使得接收端不在线时，推流服务依然能正常稳定工作。
+- **物理实现**：创建标准 UDP 套接字，将音视频 RTP 封包分别向目标 IP/端口（默认视频端口 5004，音频端口 5006）进行无连接的主动推送。
+- **SDP描述文件**：运行时自动在工作目录生成对应的播放描述文件 `test.sdp`，以指明拉流端所需的负载类型和端口。
+- **空挂断容错**：在 `UdpSender::send` 中拦截 `ECONNREFUSED` 异常，当拉流端不在线或异常退出时，推流服务依然能保持运行，支持拉流端的随时热插拔。
+- **音视频数据链路**：
+  - **视频链路**：`13855 MIPI CSI 采集` -> `RgaProcessor` -> `MppEncoder H.264编码` -> `RtpPacketizer封包(按RFC 6184分片为FU-A)` -> `UDP 发送(端口5004)` -> `主机 ffplay(解析sdp)播放`。
+  - **音频链路**：`nau8822 hw:1,0 采集` -> `单声道 PCM` -> `AudioEncoder编码为G.711A` -> `RtpPacketizer封装(Payload Type 8)` -> `UDP 发送(端口5006)` -> `主机 ffplay(解析sdp)播放`。
+- **数据压缩规格**：
+  - **视频**：H.264 Baseline Profile，RTP 动态负载类型 `96`。
+  - **音频**：G.711A (PCMA)，采样率 8000Hz，单声道，RTP 标准负载类型 `8`。
 
 ---
 
