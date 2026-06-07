@@ -140,6 +140,10 @@ int main(int argc, char** argv) {
     if (audio_port_override) config.stream.audio_port = *audio_port_override;
     if (sdp_path_override) config.stream.sdp_path = *sdp_path_override;
 
+    // 统一用最终确定的 server_ip 替换 URL 中的占位符
+    visioncast::replace_all(config.stream.rtmp_url, "{server_ip}", config.stream.server_ip);
+    visioncast::replace_all(config.stream.webrtc_url, "{server_ip}", config.stream.server_ip);
+
     VC_LOG_INFO("main", "loaded config: " + config_path);
     visioncast::PipelineManager manager(config);
     manager.print_config();

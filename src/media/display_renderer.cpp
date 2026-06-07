@@ -13,6 +13,10 @@
 
 #include "common/log.h"
 
+#if defined(VISIONCAST_ENABLE_RGA)
+#include "im2d.h"
+#endif
+
 namespace visioncast {
 namespace {
 
@@ -127,11 +131,57 @@ public:
             return;
         }
 
+        const int bytes_per_pixel = static_cast<int>(var_.bits_per_pixel / 8U);
+
+#if defined(VISIONCAST_ENABLE_RGA)
+        int dest_format = 0;
+        if (var_.bits_per_pixel == 32) {
+            if (var_.red.offset == 0) {
+                dest_format = RK_FORMAT_RGBA_8888;
+            } else if (var_.blue.offset == 0) {
+                dest_format = RK_FORMAT_BGRA_8888;
+            }
+        } else if (var_.bits_per_pixel == 24) {
+            if (var_.red.offset == 0) {
+                dest_format = RK_FORMAT_RGB_888;
+            } else if (var_.blue.offset == 0) {
+                dest_format = RK_FORMAT_BGR_888;
+            }
+        } else if (var_.bits_per_pixel == 16) {
+            dest_format = RK_FORMAT_RGB_565;
+        }
+
+        if (dest_format != 0 && bytes_per_pixel > 0) {
+            rga_buffer_t src = wrapbuffer_virtualaddr_t(
+                const_cast<std::uint8_t*>(frame.data.data()),
+                frame.width,
+                frame.height,
+                stride,
+                vertical_stride,
+                RK_FORMAT_YCbCr_420_SP);
+
+            void* dst_addr = memory_ + static_cast<std::size_t>(var_.yoffset) * fix_.line_length +
+                             static_cast<std::size_t>(var_.xoffset) * bytes_per_pixel;
+
+            rga_buffer_t dst = wrapbuffer_virtualaddr_t(
+                dst_addr,
+                static_cast<int>(var_.xres),
+                static_cast<int>(var_.yres),
+                static_cast<int>(fix_.line_length / bytes_per_pixel),
+                static_cast<int>(var_.yres),
+                dest_format);
+
+            IM_STATUS status = imresize(src, dst);
+            if (status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR) {
+                return;
+            }
+        }
+#endif
+
         const auto* y_plane = frame.data.data();
         const auto* uv_plane = frame.data.data() + y_storage;
         const int out_w = static_cast<int>(var_.xres);
         const int out_h = static_cast<int>(var_.yres);
-        const int bytes_per_pixel = static_cast<int>(var_.bits_per_pixel / 8U);
         if (bytes_per_pixel < 2) {
             return;
         }

@@ -289,6 +289,8 @@ std::string bool_text(bool value) {
     return value ? "true" : "false";
 }
 
+}  // namespace
+
 void replace_all(std::string& str, const std::string& from, const std::string& to) {
     if (from.empty()) {
         return;
@@ -299,8 +301,6 @@ void replace_all(std::string& str, const std::string& from, const std::string& t
         start_pos += to.length();
     }
 }
-
-}  // namespace
 
 VisionCastConfig default_config() {
     return VisionCastConfig{};
@@ -320,10 +320,6 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
         if (auto object = find_object(document, "encoder")) apply_encoder_config(*object, config.encoder);
         if (auto object = find_object(document, "stream")) apply_stream_config(*object, config.stream);
         if (auto object = find_object(document, "debug")) apply_debug_config(*object, config.debug);
-
-        // 统一用 server_ip 替换 URL 中的占位符
-        replace_all(config.stream.rtmp_url, "{server_ip}", config.stream.server_ip);
-        replace_all(config.stream.webrtc_url, "{server_ip}", config.stream.server_ip);
     } catch (const std::exception& ex) {
         error = std::string("invalid config: ") + ex.what();
         return false;

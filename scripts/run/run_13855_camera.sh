@@ -39,6 +39,15 @@ if [[ -n "${SDP_PATH:-}" ]]; then
     ARGS+=(--sdp-path "${SDP_PATH}")
 fi
 
+# Set sensor subdevice frame rate to 30 FPS if media-ctl and v4l2-ctl are available
+if command -v media-ctl >/dev/null 2>&1 && command -v v4l2-ctl >/dev/null 2>&1; then
+    SUBDEV=$(media-ctl -d /dev/media0 -e 'm00_b_ov13855 3-0036' 2>/dev/null || echo "")
+    if [[ -n "${SUBDEV}" && -c "${SUBDEV}" ]]; then
+        echo "Configuring camera sensor ${SUBDEV} to 30 FPS..."
+        v4l2-ctl -d "${SUBDEV}" --set-subdev-fps pad=0,fps=30 || true
+    fi
+fi
+
 export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
 cd "${INSTALL_DIR}"
 exec "${BIN}" "${ARGS[@]}" "$@"
