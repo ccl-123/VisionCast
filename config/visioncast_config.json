@@ -1,14 +1,14 @@
 {
-  "//comment_1": "默认使用 RTP over UDP 主动推流；protocol 也可配置为 rtmp 或 webrtc。",
-  "//comment_2": "RTMP 使用 rtmp_url，WebRTC 使用 webrtc_url，RTP 使用 server_ip/video_port/audio_port。",
+  "//comment_1": "首选使用 webrtc 协议进行低延迟推流，其次支持 rtmp 和 rtp 协议。可在 protocol 中配置。",
+  "//comment_2": "WebRTC 使用 webrtc_url，RTMP 使用 rtmp_url，RTP 使用 server_ip/video_port/audio_port。",
   "video": {
     "source": "mipi_13855",
     "fallback_source": "usb_c270",
     "device": "/dev/video11",
     "fallback_device": "/dev/video21",
     "fallback_format": "MJPEG",
-    "width": 1280,
-    "height": 720,
+    "width": 2560,
+    "height": 1440,
     "fps": 30,
     "format": "NV12",
     "sensor_subdev": "/dev/v4l-subdev2",
@@ -24,13 +24,13 @@
   },
   "encoder": {
     "video_codec": "h264",
-    "bitrate": 4000000,
+    "bitrate": 10000000,
     "gop": 30,
     "low_latency": true,
     "b_frames": 0
   },
   "stream": {
-    "protocol": "rtp",
+    "protocol": "webrtc",
     "rtmp_url": "rtmp://192.168.137.1:1936/live/stream",
     "webrtc_url": "http://192.168.137.1:8891/live/stream/whip",
     "server_ip": "192.168.137.1",

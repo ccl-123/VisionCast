@@ -459,8 +459,11 @@ bool WebRtcPusher::push_video_rtp(const std::vector<RtpPacket>& packets, std::st
         if (!packet.bytes.empty() &&
             !impl_->video_track->send(reinterpret_cast<const rtc::byte*>(packet.bytes.data()),
                                       packet.bytes.size())) {
-            error = "WebRTC video RTP send was buffered or dropped";
-            return false;
+            // 打印警告日志但不中断，防止突发大包或网络瞬时拥堵拖垮整个推流管线
+            static int warn_count = 0;
+            if (warn_count++ % 100 == 0) {
+                VC_LOG_WARN("webrtc", "WebRTC video RTP send buffer full or congested (packets dropped)");
+            }
         }
     }
     return true;
@@ -484,8 +487,10 @@ bool WebRtcPusher::push_audio_rtp(const std::vector<RtpPacket>& packets, std::st
         if (!packet.bytes.empty() &&
             !impl_->audio_track->send(reinterpret_cast<const rtc::byte*>(packet.bytes.data()),
                                       packet.bytes.size())) {
-            error = "WebRTC audio RTP send was buffered or dropped";
-            return false;
+            static int warn_count = 0;
+            if (warn_count++ % 100 == 0) {
+                VC_LOG_WARN("webrtc", "WebRTC audio RTP send buffer full or congested (packets dropped)");
+            }
         }
     }
     return true;
