@@ -121,11 +121,13 @@ void AudioPipeline::worker_loop() {
         if (config_.debug.enable_perf_log && now - last_log >= 1000000ULL) {
             const double seconds = static_cast<double>(now - last_log) / 1000000.0;
             const double kbps = static_cast<double>(sent_bytes * 8U) / seconds / 1000.0;
+            const double avg_pack_bytes = frames > 0 ? (static_cast<double>(sent_bytes) / frames) : 0.0;
 
             std::ostringstream log_str;
             log_str << std::fixed << std::setprecision(2)
                     << "frames=" << frames
                     << " bitrate_kbps=" << kbps
+                    << " avg_bytes=" << avg_pack_bytes
                     << " drop_frames=" << raw_queue_.dropped()
                     << " queue_raw=" << raw_queue_.size();
             VC_LOG_INFO("AudioPipeline", log_str.str());

@@ -172,6 +172,7 @@ void VideoPipeline::worker_loop() {
             const double rga_ms = static_cast<double>(t_process_end - t_process_start) / 1000.0;
             const double mpp_ms = static_cast<double>(t_encode_end - t_encode_start) / 1000.0;
             const std::string rga_mode = processor_.is_hardware_accelerated() ? "HW" : "SW";
+            const double avg_pack_bytes = processed > 0 ? (static_cast<double>(sent_bytes) / processed) : 0.0;
 
             std::ostringstream log_str;
             log_str << std::fixed << std::setprecision(2)
@@ -179,6 +180,7 @@ void VideoPipeline::worker_loop() {
                     << " rga_ms=" << rga_ms << " (" << rga_mode << ")"
                     << " mpp_ms=" << mpp_ms << " (HW)"
                     << " bitrate_kbps=" << kbps
+                    << " avg_bytes=" << avg_pack_bytes
                     << " drop_frames=" << raw_queue_.dropped()
                     << " queue_raw=" << raw_queue_.size();
             VC_LOG_INFO("VideoPipeline", log_str.str());
