@@ -39,13 +39,20 @@ if [[ -n "${SDP_PATH:-}" ]]; then
     ARGS+=(--sdp-path "${SDP_PATH}")
 fi
 
-# Set sensor subdevice frame rate to 30 FPS if media-ctl and v4l2-ctl are available
-if command -v media-ctl >/dev/null 2>&1 && command -v v4l2-ctl >/dev/null 2>&1; then
-    SUBDEV=$(media-ctl -d /dev/media0 -e 'm00_b_ov13855 3-0036' 2>/dev/null || echo "")
-    if [[ -n "${SUBDEV}" && -c "${SUBDEV}" ]]; then
-        echo "Configuring camera sensor ${SUBDEV} to 30 FPS..."
-        v4l2-ctl -d "${SUBDEV}" --set-subdev-fps pad=0,fps=30 || true
-    fi
+# SSH and non-interactive shells don't inherit the active GNOME session.
+if [[ -z "${DISPLAY:-}" && -S /tmp/.X11-unix/X0 ]]; then
+    export DISPLAY=:0
+fi
+if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+if [[ -z "${XAUTHORITY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    for auth_file in "${XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.*; do
+        if [[ -r "${auth_file}" ]]; then
+            export XAUTHORITY="${auth_file}"
+            break
+        fi
+    done
 fi
 
 export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"

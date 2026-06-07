@@ -39,6 +39,21 @@ if [[ -n "${SDP_PATH:-}" ]]; then
     ARGS+=(--sdp-path "${SDP_PATH}")
 fi
 
+if [[ -z "${DISPLAY:-}" && -S /tmp/.X11-unix/X0 ]]; then
+    export DISPLAY=:0
+fi
+if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+if [[ -z "${XAUTHORITY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    for auth_file in "${XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.*; do
+        if [[ -r "${auth_file}" ]]; then
+            export XAUTHORITY="${auth_file}"
+            break
+        fi
+    done
+fi
+
 export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
 cd "${INSTALL_DIR}"
 exec "${BIN}" "${ARGS[@]}" "$@"

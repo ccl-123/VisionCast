@@ -1,14 +1,19 @@
 #include "media/display_renderer.h"
 
 #include <fcntl.h>
+#include <dlfcn.h>
 #include <linux/fb.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <vector>
 #include <utility>
 
 #include "common/log.h"
@@ -69,6 +74,278 @@ void write_pixel(std::uint8_t* dst,
         dst[1] = static_cast<std::uint8_t>(pixel >> 8);
     }
 }
+
+class X11Window {
+public:
+    ~X11Window() {
+        close();
+    }
+
+    bool open_window(const std::string& name, int source_width, int source_height) {
+        if (std::getenv("DISPLAY") == nullptr || !load_api()) {
+            return false;
+        }
+        display_ = x_open_display_(nullptr);
+        if (display_ == nullptr) {
+            VC_LOG_WARN("display", "XOpenDisplay failed for DISPLAY=" +
+                                       std::string(std::getenv("DISPLAY")));
+            close();
+            return false;
+        }
+
+        const int screen = DefaultScreen(display_);
+        const int max_width = std::max(320, DisplayWidth(display_, screen) - 80);
+        const int max_height = std::max(240, DisplayHeight(display_, screen) - 100);
+        const double scale =
+            std::min(1.0,
+                     std::min(static_cast<double>(max_width) / source_width,
+                              static_cast<double>(max_height) / source_height));
+        width_ = std::max(1, static_cast<int>(source_width * scale));
+        height_ = std::max(1, static_cast<int>(source_height * scale));
+
+        window_ = x_create_simple_window_(
+            display_,
+            RootWindow(display_, screen),
+            20,
+            20,
+            static_cast<unsigned int>(width_),
+            static_cast<unsigned int>(height_),
+            1,
+            BlackPixel(display_, screen),
+            WhitePixel(display_, screen));
+        if (window_ == 0) {
+            VC_LOG_WARN("display", "XCreateSimpleWindow failed");
+            close();
+            return false;
+        }
+        x_store_name_(display_, window_, name.c_str());
+        x_select_input_(
+            display_, window_, ExposureMask | StructureNotifyMask);
+        gc_ = x_create_gc_(display_, window_, 0, nullptr);
+        if (gc_ == nullptr) {
+            VC_LOG_WARN("display", "XCreateGC failed");
+            close();
+            return false;
+        }
+        x_map_raised_(display_, window_);
+        x_flush_(display_);
+        VC_LOG_INFO("display",
+                    "X11/XWayland preview enabled " + std::to_string(width_) +
+                        "x" + std::to_string(height_) + " DISPLAY=" +
+                        std::string(std::getenv("DISPLAY")));
+        return true;
+    }
+
+    bool valid() const {
+        return display_ != nullptr && window_ != 0 && gc_ != nullptr;
+    }
+
+    void render_nv12(const VideoFrame& frame) {
+        if (!valid() || frame.format != "NV12" || frame.width <= 0 ||
+            frame.height <= 0) {
+            return;
+        }
+        process_events();
+        if (!valid()) {
+            return;
+        }
+
+        const int screen = DefaultScreen(display_);
+        XImage* image = x_create_image_(
+            display_,
+            DefaultVisual(display_, screen),
+            static_cast<unsigned int>(DefaultDepth(display_, screen)),
+            ZPixmap,
+            0,
+            nullptr,
+            static_cast<unsigned int>(width_),
+            static_cast<unsigned int>(height_),
+            32,
+            0);
+        if (image == nullptr || image->bits_per_pixel != 32) {
+            if (image != nullptr) {
+                image->f.destroy_image(image);
+            }
+            return;
+        }
+
+        std::vector<std::uint8_t> pixels(
+            static_cast<std::size_t>(image->bytes_per_line) * height_);
+        image->data = reinterpret_cast<char*>(pixels.data());
+        const int stride = frame.stride > 0 ? frame.stride : frame.width;
+        const int vertical_stride =
+            frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
+        const std::size_t y_storage =
+            static_cast<std::size_t>(stride) * vertical_stride;
+        if (frame.data.size() < y_storage + y_storage / 2U) {
+            image->data = nullptr;
+            image->f.destroy_image(image);
+            return;
+        }
+
+        bool converted = false;
+#if defined(VISIONCAST_ENABLE_RGA)
+        int destination_format = 0;
+        if (image->red_mask == 0x00ff0000UL &&
+            image->blue_mask == 0x000000ffUL) {
+            destination_format = RK_FORMAT_BGRA_8888;
+        } else if (image->red_mask == 0x000000ffUL &&
+                   image->blue_mask == 0x00ff0000UL) {
+            destination_format = RK_FORMAT_RGBA_8888;
+        }
+        if (destination_format != 0 &&
+            image->bytes_per_line == width_ * 4) {
+            rga_buffer_t source = wrapbuffer_virtualaddr_t(
+                const_cast<std::uint8_t*>(frame.data.data()),
+                frame.width,
+                frame.height,
+                stride,
+                vertical_stride,
+                RK_FORMAT_YCbCr_420_SP);
+            rga_buffer_t destination = wrapbuffer_virtualaddr_t(
+                pixels.data(),
+                width_,
+                height_,
+                width_,
+                height_,
+                destination_format);
+            const IM_STATUS status = imresize(source, destination);
+            converted =
+                status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
+        }
+#endif
+        if (!converted) {
+            const auto* y_plane = frame.data.data();
+            const auto* uv_plane = frame.data.data() + y_storage;
+            for (int y = 0; y < height_; ++y) {
+                const int source_y = y * frame.height / height_;
+                auto* row = pixels.data() +
+                            static_cast<std::size_t>(y) * image->bytes_per_line;
+                for (int x = 0; x < width_; ++x) {
+                    const int source_x = x * frame.width / width_;
+                    std::uint8_t r = 0;
+                    std::uint8_t g = 0;
+                    std::uint8_t b = 0;
+                    nv12_to_rgb(
+                        y_plane, uv_plane, stride, source_x, source_y, r, g, b);
+                    auto* pixel = row + static_cast<std::size_t>(x) * 4U;
+                    if (image->red_mask == 0x00ff0000UL) {
+                        pixel[0] = b;
+                        pixel[1] = g;
+                        pixel[2] = r;
+                    } else {
+                        pixel[0] = r;
+                        pixel[1] = g;
+                        pixel[2] = b;
+                    }
+                    pixel[3] = 0xFF;
+                }
+            }
+        }
+
+        x_put_image_(display_,
+                     window_,
+                     gc_,
+                     image,
+                     0,
+                     0,
+                     0,
+                     0,
+                     static_cast<unsigned int>(width_),
+                     static_cast<unsigned int>(height_));
+        x_flush_(display_);
+        image->data = nullptr;
+        image->f.destroy_image(image);
+    }
+
+private:
+    template <typename Function>
+    bool load_symbol(Function& function, const char* name) {
+        function = reinterpret_cast<Function>(dlsym(library_, name));
+        return function != nullptr;
+    }
+
+    bool load_api() {
+        library_ = dlopen("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
+        if (library_ == nullptr) {
+            VC_LOG_WARN("display", std::string("dlopen libX11.so.6: ") + dlerror());
+            return false;
+        }
+        if (!load_symbol(x_open_display_, "XOpenDisplay") ||
+            !load_symbol(x_close_display_, "XCloseDisplay") ||
+            !load_symbol(x_create_simple_window_, "XCreateSimpleWindow") ||
+            !load_symbol(x_store_name_, "XStoreName") ||
+            !load_symbol(x_select_input_, "XSelectInput") ||
+            !load_symbol(x_create_gc_, "XCreateGC") ||
+            !load_symbol(x_free_gc_, "XFreeGC") ||
+            !load_symbol(x_map_raised_, "XMapRaised") ||
+            !load_symbol(x_destroy_window_, "XDestroyWindow") ||
+            !load_symbol(x_pending_, "XPending") ||
+            !load_symbol(x_next_event_, "XNextEvent") ||
+            !load_symbol(x_create_image_, "XCreateImage") ||
+            !load_symbol(x_put_image_, "XPutImage") ||
+            !load_symbol(x_flush_, "XFlush")) {
+            VC_LOG_WARN("display", "libX11 is missing required symbols");
+            close();
+            return false;
+        }
+        return true;
+    }
+
+    void process_events() {
+        while (valid() && x_pending_(display_) > 0) {
+            XEvent event{};
+            x_next_event_(display_, &event);
+            if (event.type == ConfigureNotify) {
+                width_ = std::max(1, event.xconfigure.width);
+                height_ = std::max(1, event.xconfigure.height);
+            } else if (event.type == DestroyNotify) {
+                window_ = 0;
+            }
+        }
+    }
+
+    void close() {
+        if (display_ != nullptr && gc_ != nullptr) {
+            x_free_gc_(display_, gc_);
+            gc_ = nullptr;
+        }
+        if (display_ != nullptr && window_ != 0) {
+            x_destroy_window_(display_, window_);
+            window_ = 0;
+        }
+        if (display_ != nullptr) {
+            x_close_display_(display_);
+            display_ = nullptr;
+        }
+        if (library_ != nullptr) {
+            dlclose(library_);
+            library_ = nullptr;
+        }
+    }
+
+    void* library_ = nullptr;
+    Display* display_ = nullptr;
+    Window window_ = 0;
+    GC gc_ = nullptr;
+    int width_ = 0;
+    int height_ = 0;
+
+    decltype(&XOpenDisplay) x_open_display_ = nullptr;
+    decltype(&XCloseDisplay) x_close_display_ = nullptr;
+    decltype(&XCreateSimpleWindow) x_create_simple_window_ = nullptr;
+    decltype(&XStoreName) x_store_name_ = nullptr;
+    decltype(&XSelectInput) x_select_input_ = nullptr;
+    decltype(&XCreateGC) x_create_gc_ = nullptr;
+    decltype(&XFreeGC) x_free_gc_ = nullptr;
+    decltype(&XMapRaised) x_map_raised_ = nullptr;
+    decltype(&XDestroyWindow) x_destroy_window_ = nullptr;
+    decltype(&XPending) x_pending_ = nullptr;
+    decltype(&XNextEvent) x_next_event_ = nullptr;
+    decltype(&XCreateImage) x_create_image_ = nullptr;
+    decltype(&XPutImage) x_put_image_ = nullptr;
+    decltype(&XFlush) x_flush_ = nullptr;
+};
 
 class Framebuffer {
 public:
@@ -242,15 +519,27 @@ void DisplayRenderer::submit(VideoFrame frame) {
 }
 
 void DisplayRenderer::render_loop() {
-    (void)window_name_;
+    X11Window window;
     Framebuffer framebuffer;
-    const bool enabled = framebuffer.open_device();
+    bool backend_selected = false;
+    bool use_window = false;
+    bool use_framebuffer = false;
     while (running_) {
         VideoFrame frame;
         if (!queue_.pop(frame)) {
             break;
         }
-        if (enabled) {
+        if (!backend_selected) {
+            use_window =
+                window.open_window(window_name_, frame.width, frame.height);
+            if (!use_window) {
+                use_framebuffer = framebuffer.open_device();
+            }
+            backend_selected = true;
+        }
+        if (use_window && window.valid()) {
+            window.render_nv12(frame);
+        } else if (use_framebuffer) {
             framebuffer.render_nv12(frame);
         }
     }

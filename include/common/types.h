@@ -16,6 +16,9 @@ struct VideoConfig {
     int height = 720;
     int fps = 30;
     std::string format = "NV12";
+    std::string sensor_subdev;
+    int sensor_exposure = 0;
+    int sensor_vblank = -1;
 };
 
 struct AudioConfig {

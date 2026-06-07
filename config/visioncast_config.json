@@ -10,7 +10,10 @@
     "width": 1280,
     "height": 720,
     "fps": 30,
-    "format": "NV12"
+    "format": "NV12",
+    "sensor_subdev": "/dev/v4l-subdev2",
+    "sensor_exposure": 3000,
+    "sensor_vblank": 78
   },
   "audio": {
     "device": "hw:1,0",

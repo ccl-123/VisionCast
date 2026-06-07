@@ -252,6 +252,9 @@ void apply_video_config(const std::string& object, VideoConfig& video) {
     if (auto value = int_value(object, "height")) video.height = *value;
     if (auto value = int_value(object, "fps")) video.fps = *value;
     if (auto value = string_value(object, "format")) video.format = *value;
+    if (auto value = string_value(object, "sensor_subdev")) video.sensor_subdev = *value;
+    if (auto value = int_value(object, "sensor_exposure")) video.sensor_exposure = *value;
+    if (auto value = int_value(object, "sensor_vblank")) video.sensor_vblank = *value;
 }
 
 void apply_audio_config(const std::string& object, AudioConfig& audio) {
@@ -336,7 +339,13 @@ std::string summarize_config(const VisionCastConfig& config) {
         << ", fallback_format=" << config.video.fallback_format
         << ", " << config.video.width << "x" << config.video.height
         << "@" << config.video.fps
-        << ", format=" << config.video.format << '\n';
+        << ", format=" << config.video.format;
+    if (!config.video.sensor_subdev.empty()) {
+        out << ", sensor_subdev=" << config.video.sensor_subdev
+            << ", sensor_exposure=" << config.video.sensor_exposure
+            << ", sensor_vblank=" << config.video.sensor_vblank;
+    }
+    out << '\n';
     out << "Audio: device=" << config.audio.device
         << ", sample_rate=" << config.audio.sample_rate
         << ", channels=" << config.audio.channels

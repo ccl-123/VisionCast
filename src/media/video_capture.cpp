@@ -113,6 +113,52 @@ bool is_mplane_type(v4l2_buf_type type) {
     return type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 }
 
+void configure_sensor_frame_rate(const VideoConfig& config,
+                                 const std::string& active_device) {
+    if (config.sensor_subdev.empty() || active_device != config.device) {
+        return;
+    }
+
+    const int sensor_fd =
+        open(config.sensor_subdev.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (sensor_fd < 0) {
+        VC_LOG_WARN("video-capture",
+                    errno_text("open sensor subdevice " + config.sensor_subdev));
+        return;
+    }
+
+    const auto set_control = [sensor_fd, &config](std::uint32_t id,
+                                                  int value,
+                                                  const char* name) {
+        if (value < 0) {
+            return true;
+        }
+        v4l2_control control{};
+        control.id = id;
+        control.value = value;
+        if (ioctl(sensor_fd, VIDIOC_S_CTRL, &control) == 0) {
+            return true;
+        }
+        VC_LOG_WARN("video-capture",
+                    errno_text(std::string("set ") + name + " on " +
+                               config.sensor_subdev));
+        return false;
+    };
+
+    const bool exposure_ok =
+        config.sensor_exposure <= 0 ||
+        set_control(V4L2_CID_EXPOSURE, config.sensor_exposure, "exposure");
+    const bool vblank_ok =
+        set_control(V4L2_CID_VBLANK, config.sensor_vblank, "vertical_blanking");
+    if (exposure_ok && vblank_ok) {
+        VC_LOG_INFO("video-capture",
+                    "sensor fixed-rate controls applied: exposure=" +
+                        std::to_string(config.sensor_exposure) +
+                        " vblank=" + std::to_string(config.sensor_vblank));
+    }
+    close(sensor_fd);
+}
+
 std::string canonical_frame_format(std::uint32_t fourcc) {
     if (fourcc == V4L2_PIX_FMT_MJPEG || fourcc == V4L2_PIX_FMT_JPEG) {
         return "MJPEG";
@@ -418,6 +464,7 @@ void VideoCapture::capture_loop() {
             close(fd);
             continue;
         }
+        configure_sensor_frame_rate(config_, device);
 
         const int active_width = static_cast<int>(
             is_mplane_type(type) ? fmt.fmt.pix_mp.width : fmt.fmt.pix.width);
