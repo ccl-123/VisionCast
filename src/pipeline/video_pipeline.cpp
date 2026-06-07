@@ -11,6 +11,8 @@
 #include "pipeline/video_pipeline.h"
 
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 #include "common/log.h"
@@ -161,19 +163,26 @@ void VideoPipeline::worker_loop() {
         sent_bytes += encoded.data.size();
         ++processed;
 
-        // 周期性（每秒）统计并输出视频流水线性能指标：包括实际 FPS、RGA 耗时、MPP 编码耗时、发送码率等
+        // 周期性（每秒）统计并输出视频流水线性能指标：包括实际 FPS、RGA 耗时（标注硬件 HW 还是软件 SW 兜底）、MPP 编码耗时、发送码率等
         const std::uint64_t now = monotonic_now_us();
         if (config_.debug.enable_perf_log && now - last_log >= 1000000ULL) {
             const double seconds = static_cast<double>(now - last_log) / 1000000.0;
             const double fps = static_cast<double>(processed) / seconds;
             const double kbps = static_cast<double>(sent_bytes * 8U) / seconds / 1000.0;
-            VC_LOG_INFO("VideoPipeline",
-                        "fps=" + std::to_string(fps) +
-                            " rga_us=" + std::to_string(t_process_end - t_process_start) +
-                            " mpp_us=" + std::to_string(t_encode_end - t_encode_start) +
-                            " bitrate_kbps=" + std::to_string(kbps) +
-                            " drop_frames=" + std::to_string(raw_queue_.dropped()) +
-                            " queue_raw=" + std::to_string(raw_queue_.size()));
+            const double rga_ms = static_cast<double>(t_process_end - t_process_start) / 1000.0;
+            const double mpp_ms = static_cast<double>(t_encode_end - t_encode_start) / 1000.0;
+            const std::string rga_mode = processor_.is_hardware_accelerated() ? "HW" : "SW";
+
+            std::ostringstream log_str;
+            log_str << std::fixed << std::setprecision(2)
+                    << "fps=" << fps
+                    << " rga_ms=" << rga_ms << " (" << rga_mode << ")"
+                    << " mpp_ms=" << mpp_ms << " (HW)"
+                    << " bitrate_kbps=" << kbps
+                    << " drop_frames=" << raw_queue_.dropped()
+                    << " queue_raw=" << raw_queue_.size();
+            VC_LOG_INFO("VideoPipeline", log_str.str());
+
             processed = 0;
             sent_bytes = 0;
             last_log = now;

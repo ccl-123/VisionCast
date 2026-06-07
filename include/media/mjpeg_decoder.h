@@ -40,6 +40,9 @@ public:
     // @return 解码成功返回 true，否则返回 false
     bool decode(const VideoFrame& input, VideoFrame& output, std::string& error);
 
+    // Returns true if the last frame was decoded using Rockchip MPP hardware acceleration.
+    bool is_hardware_accelerated() const;
+
 private:
     std::unique_ptr<Impl> impl_; // 指向具体实现类的智能指针
 };

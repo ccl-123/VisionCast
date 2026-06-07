@@ -7,6 +7,8 @@
 
 #include "pipeline/audio_pipeline.h"
 
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
 #include "common/log.h"
@@ -119,11 +121,15 @@ void AudioPipeline::worker_loop() {
         if (config_.debug.enable_perf_log && now - last_log >= 1000000ULL) {
             const double seconds = static_cast<double>(now - last_log) / 1000000.0;
             const double kbps = static_cast<double>(sent_bytes * 8U) / seconds / 1000.0;
-            VC_LOG_INFO("AudioPipeline",
-                        "frames=" + std::to_string(frames) +
-                            " bitrate_kbps=" + std::to_string(kbps) +
-                            " drop_frames=" + std::to_string(raw_queue_.dropped()) +
-                            " queue_raw=" + std::to_string(raw_queue_.size()));
+
+            std::ostringstream log_str;
+            log_str << std::fixed << std::setprecision(2)
+                    << "frames=" << frames
+                    << " bitrate_kbps=" << kbps
+                    << " drop_frames=" << raw_queue_.dropped()
+                    << " queue_raw=" << raw_queue_.size();
+            VC_LOG_INFO("AudioPipeline", log_str.str());
+
             frames = 0;
             sent_bytes = 0;
             last_log = now;

@@ -32,10 +32,14 @@ public:
     // @return 处理成功返回 true，否则返回 false
     bool process(const VideoFrame& input, VideoFrame& output, std::string& error);
 
+    // Returns true if the last process call utilized RGA hardware acceleration.
+    bool is_hardware_accelerated() const;
+
 private:
     MjpegDecoder mjpeg_decoder_;  // 用于 MJPEG 格式输入帧的解码器实例
     int output_width_;            // 目标输出的图像宽度
     int output_height_;           // 目标输出的图像高度
+    bool last_frame_hardware_ = false; // 记录上一帧是否使用 RGA 硬件加速
 };
 
 }  // namespace visioncast

@@ -9,6 +9,7 @@
 #include "media/mjpeg_decoder.h"
 
 #include <algorithm>
+#include "common/log.h"
 #include <csetjmp>
 #include <cstring>
 #include <sstream>
@@ -41,6 +42,7 @@ struct MjpegDecoder::Impl {
     bool mpp_init_attempted = false;
     bool mpp_ready = false;
 #endif
+    bool last_frame_hardware = false;
 };
 
 namespace {
@@ -424,16 +426,38 @@ bool MjpegDecoder::decode(const VideoFrame& input,
         open_mpp(*impl_, input.width, input.height, init_error);
         if (!impl_->mpp_ready) {
             error = init_error;
+            VC_LOG_WARN("mjpeg-decoder", "MPP hardware MJPEG decoder init failed: " + init_error + ", falling back to software libjpeg decoding");
+        } else {
+            VC_LOG_INFO("mjpeg-decoder", "MPP hardware MJPEG decoder initialized successfully");
         }
     }
     if (impl_->mpp_ready) {
-        return decode_with_mpp(*impl_, input, output, error);
+        impl_->last_frame_hardware = true;
+        bool success = decode_with_mpp(*impl_, input, output, error);
+        if (!success) {
+            VC_LOG_WARN("mjpeg-decoder", "MPP hardware decode failed: " + error + ", falling back to software libjpeg decoding");
+            impl_->last_frame_hardware = false;
+            error.clear();
+            return decode_with_libjpeg(input, output, error);
+        }
+        return true;
+    }
+#else
+    static bool warned_once = false;
+    if (!warned_once) {
+        VC_LOG_WARN("mjpeg-decoder", "MPP hardware decoding is not compiled/enabled, using software libjpeg decoding");
+        warned_once = true;
     }
 #endif
 
     // 若硬件不可用或初始化失败，则 fallback 至 CPU 软件解码
+    impl_->last_frame_hardware = false;
     error.clear();
     return decode_with_libjpeg(input, output, error);
+}
+
+bool MjpegDecoder::is_hardware_accelerated() const {
+    return impl_->last_frame_hardware;
 }
 
 }  // namespace visioncast

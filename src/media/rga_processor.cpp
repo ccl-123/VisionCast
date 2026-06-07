@@ -10,6 +10,7 @@
 #include "media/rga_processor.h"
 
 #include <algorithm>
+#include "common/log.h"
 #include <cstddef>
 #include <cstring>
 #include <string>
@@ -248,12 +249,27 @@ bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::str
 #if defined(VISIONCAST_ENABLE_RGA)
     // 2. 尝试使用瑞芯微 RGA 硬件加速接口进行缩放和颜色空间转换
     if (rga_process(*source, output, error)) {
+        last_frame_hardware_ = true;
         return true;
     }
     if (!error.empty()) {
-        return false;
+        VC_LOG_WARN("rga", "RgaProcessor hardware processing failed: " + error + ", falling back to software CPU conversion");
+    } else {
+        static bool warned_once = false;
+        if (!warned_once) {
+            VC_LOG_WARN("rga", "RgaProcessor hardware processing failed, falling back to software CPU conversion");
+            warned_once = true;
+        }
+    }
+#else
+    static bool warned_once = false;
+    if (!warned_once) {
+        VC_LOG_WARN("rga", "RGA hardware acceleration is not compiled/enabled, using software CPU conversion");
+        warned_once = true;
     }
 #endif
+
+    last_frame_hardware_ = false;
     // 3. Fallback：硬件处理不可用时，使用 CPU 执行软件下采样和缩放
     const std::string source_format = normalize_format(source->format);
     if (source_format == "NV12") {
@@ -281,6 +297,10 @@ bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::str
 
     error = "unsupported video format for NV12 conversion: " + source->format;
     return false;
+}
+
+bool RgaProcessor::is_hardware_accelerated() const {
+    return last_frame_hardware_;
 }
 
 }  // namespace visioncast
