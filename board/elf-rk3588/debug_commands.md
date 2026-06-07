@@ -1,430 +1,162 @@
-# ELF-RK3588 VisionCast 调试命令
+# ELF-RK3588 VisionCast 调试与运维命令手册 (已完工版)
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
-> 文档作用：集中记录摄像头、音频、MPP、RGA、网络、推流相关调试命令。
+> 状态：系统设备节点已全部锁定，提供日常运行监控、故障自查与推拉流测试的快捷命令手册。
 
 ---
 
-## 1. 系统信息
+## 1. 核心运行与推流命令
 
+### 1.1 使用脚本启动（推荐）
+系统在安装包的运行目录下集成了自动化运行脚本，支持传入协议参数直接运行：
+- **WebRTC 协议推流**：
+  ```bash
+  ./install/visioncast/scripts/run/run_usb_camera.sh webrtc
+  ```
+- **RTMP 协议推流**：
+  ```bash
+  ./install/visioncast/scripts/run/run_usb_camera.sh rtmp
+  ```
+- **RTSP 协议推流**：
+  ```bash
+  ./install/visioncast/scripts/run/run_usb_camera.sh rtsp
+  ```
+- **RTP over UDP 推流**：
+  ```bash
+  ./install/visioncast/scripts/run/run_usb_camera.sh rtp
+  ```
+
+### 1.2 手动命令启动
+直接启动主程序，可以通过动态指定动态链接库加载路径（LD_LIBRARY_PATH）：
 ```bash
-uname -a
-uname -m
-cat /etc/os-release
-free -h
-df -h
-uptime
-```
-
-查看 CPU：
-
-```bash
-lscpu
-```
-
-查看内存：
-
-```bash
-free -h
-cat /proc/meminfo | head
+env LD_LIBRARY_PATH=./install/visioncast/lib ./install/visioncast/bin/visioncast --protocol webrtc
 ```
 
 ---
 
-## 2. 视频设备枚举
+## 2. 视频采集设备常用调试
 
+### 2.1 列出所有 V4L2 视频物理设备
 ```bash
 v4l2-ctl --list-devices
 ```
 
-查看某个节点信息：
-
+### 2.2 查看 13855 MIPI 摄像头 (主节点 `/dev/video11`) 属性
 ```bash
-v4l2-ctl -d /dev/videoX -D
-v4l2-ctl -d /dev/videoX --all
-v4l2-ctl -d /dev/videoX --list-formats-ext
+v4l2-ctl -d /dev/video11 -D
+v4l2-ctl -d /dev/video11 --list-formats-ext
 ```
 
----
-
-## 3. 13855 / MIPI / ISP 日志
-
-```bash
-dmesg | grep -Ei "13855|ov13855|camera|mipi|csi|rkcif|rkisp"
-```
-
-查看 I2C 设备名：
-
-```bash
-for f in /sys/bus/i2c/devices/*/name; do
-    echo "$f: $(cat $f)"
-done | grep -Ei "ov|13855|camera|imx|gc"
-```
-
----
-
-## 4. Media Graph
-
-RKCIF：
-
-```bash
-media-ctl -p -d /dev/media0
-```
-
-RKISP：
-
-```bash
-media-ctl -p -d /dev/media1
-```
-
-USB C270：
-
-```bash
-media-ctl -p -d /dev/media2
-```
-
----
-
-## 5. RKISP mainpath 节点能力
-
-```bash
-for i in {11..17}; do
-    echo "===== /dev/video$i ====="
-    v4l2-ctl -d /dev/video$i -D || true
-    v4l2-ctl -d /dev/video$i --list-formats-ext || true
-done
-```
-
----
-
-## 6. USB C270 节点能力
-
+### 2.3 查看 USB C270 (备用节点 `/dev/video21`) 属性
 ```bash
 v4l2-ctl -d /dev/video21 -D
 v4l2-ctl -d /dev/video21 --list-formats-ext
-
-v4l2-ctl -d /dev/video22 -D
-v4l2-ctl -d /dev/video22 --list-formats-ext
 ```
+
+### 2.4 手动进行 V4L2 视频采集裸流测试
+- **主 MIPI 摄像头采集测试 (NV12 720p 100帧)**：
+  ```bash
+  v4l2-ctl -d /dev/video11 \
+    --set-fmt-video=width=1280,height=720,pixelformat=NV12 \
+    --stream-mmap=4 \
+    --stream-count=100 \
+    --stream-to=/tmp/13855_test.yuv
+  ```
+- **备用 USB 摄像头采集测试 (MJPEG 720p 100帧)**：
+  ```bash
+  v4l2-ctl -d /dev/video21 \
+    --set-fmt-video=width=1280,height=720,pixelformat=MJPG \
+    --stream-mmap=4 \
+    --stream-count=100 \
+    --stream-to=/tmp/c270_test.mjpg
+  ```
 
 ---
 
-## 7. V4L2 采集测试
+## 3. 音频设备常用调试
 
-### 7.1 C270 MJPEG 测试
-
-```bash
-v4l2-ctl -d /dev/video21 \
-  --set-fmt-video=width=1280,height=720,pixelformat=MJPG \
-  --stream-mmap=4 \
-  --stream-count=100 \
-  --stream-to=/tmp/c270_test.mjpg
-```
-
-### 7.2 C270 YUYV 测试
-
-```bash
-v4l2-ctl -d /dev/video21 \
-  --set-fmt-video=width=640,height=480,pixelformat=YUYV \
-  --stream-mmap=4 \
-  --stream-count=100 \
-  --stream-to=/tmp/c270_test.yuv
-```
-
-### 7.3 13855 候选节点测试
-
-```bash
-v4l2-ctl -d /dev/videoX \
-  --stream-mmap=4 \
-  --stream-count=100 \
-  --stream-to=/tmp/13855_test.yuv
-```
-
-指定格式测试：
-
-```bash
-v4l2-ctl -d /dev/videoX \
-  --set-fmt-video=width=1280,height=720,pixelformat=NV12 \
-  --stream-mmap=4 \
-  --stream-count=100 \
-  --stream-to=/tmp/13855_720p_nv12.yuv
-```
-
----
-
-## 8. 音频设备查询
-
+### 3.1 列出 ALSA 录音与播放硬件设备
 ```bash
 arecord -l
 aplay -l
-cat /proc/asound/cards
-cat /proc/asound/pcm
 ```
 
-查询 ALSA 参数：
+### 3.2 录音与播放闭环验证测试
+- **手动录音测试 (双声道 S16_LE 48000Hz 5秒)**：
+  ```bash
+  arecord -D hw:1,0 -f S16_LE -r 48000 -c 2 -d 5 /tmp/audio_test.wav
+  ```
+- **手动播放录音测试**：
+  ```bash
+  aplay -D hw:1,0 /tmp/audio_test.wav
+  ```
 
-```bash
-arecord -D hw:1,0 --dump-hw-params
-```
+### 3.3 Mixer 模拟音量与增益调节
+- **查询主麦克风 (Main Mic) 通道增益属性**：
+  ```bash
+  amixer -c 1 sget 'Main Mic'
+  amixer -c 1 sget 'PGA'
+  amixer -c 1 sget 'PGA Boost'
+  ```
+- **命令行图形化调节 Mixer 控制面板**：
+  ```bash
+  alsamixer -c 1
+  ```
+  *(注：按 `F4` 切换至 Capture 采集页面，使用方向键调节 PGA 增益及开关)*
 
 ---
 
-## 9. NAU8822 Mixer
+## 4. 物理拓扑关系 (Media Graph) 查询
 
-```bash
-amixer -c 1 scontrols
-amixer -c 1 contents
-```
-
-图形化控制：
-
-```bash
-alsamixer -c 1
-```
-
-常用查询：
-
-```bash
-amixer -c 1 sget 'Main Mic'
-amixer -c 1 sget 'Headset Mic'
-amixer -c 1 sget 'ADC'
-amixer -c 1 sget 'PGA'
-amixer -c 1 sget 'PGA Boost'
-```
+- **查询 CIF (MIPI 接收前端) 拓扑**：
+  ```bash
+  media-ctl -p -d /dev/media0
+  ```
+- **查询 ISP (图像处理器与输出节点) 拓扑**：
+  ```bash
+  media-ctl -p -d /dev/media1
+  ```
+- **查询 UVC (USB 摄像头) 拓扑**：
+  ```bash
+  media-ctl -p -d /dev/media2
+  ```
 
 ---
 
-## 10. 音频录放测试
+## 5. 板端运行状况与性能监控
 
-录音：
-
+### 5.1 查看 CPU 与进程资源占用率
 ```bash
-arecord -D hw:1,0 -f S16_LE -r 48000 -c 2 -d 5 /tmp/audio_test.wav
-```
-
-播放：
-
-```bash
-aplay -D hw:1,0 /tmp/audio_test.wav
-```
-
-单声道录音：
-
-```bash
-arecord -D hw:1,0 -f S16_LE -r 48000 -c 1 -d 5 /tmp/audio_mono.wav
-```
-
----
-
-## 11. USB Audio 检查
-
-```bash
-lsmod | grep snd_usb_audio
-sudo modprobe snd_usb_audio
-dmesg | grep -Ei "usb audio|snd_usb|C270|webcam|audio"
-```
-
-当前已知结论：
-
-```text
-当前内核缺少 snd_usb_audio 模块，USB C270 麦克风暂不可用。
-```
-
----
-
-## 12. MPP 检查
-
-```bash
-which mpi_enc_test
-which mpi_dec_test
-which mpp_info_test
-```
-
-查询库：
-
-```bash
-ldconfig -p | grep -i mpp
-find /usr/include -iname "rk_mpi.h" 2>/dev/null
-find /usr/include -iname "mpp_frame.h" 2>/dev/null
-find /usr/lib -iname "librockchip_mpp.so*" 2>/dev/null
-find /lib -iname "librockchip_mpp.so*" 2>/dev/null
-```
-
-编码测试程序：
-
-```bash
-mpi_enc_test
-```
-
-查看帮助：
-
-```bash
-mpi_enc_test --help
-```
-
----
-
-## 13. RGA 检查
-
-```bash
-ldconfig -p | grep -i rga
-find /usr/include -iname "*rga*" 2>/dev/null
-find /usr/lib -iname "*rga*" 2>/dev/null
-find /lib -iname "*rga*" 2>/dev/null
-```
-
----
-
-## 14. RKAIQ 检查
-
-```bash
-ps aux | grep -i rkaiq
-find /etc -iname "*iq*" 2>/dev/null
-find /usr -iname "*rkaiq*" 2>/dev/null | head -50
-```
-
-查找 IQ 文件：
-
-```bash
-find / -iname "*13855*" 2>/dev/null
-find / -iname "*ov13855*" 2>/dev/null
-```
-
----
-
-## 15. 网络检查
-
-```bash
-ip addr
-ip route
-ping -c 4 192.168.137.1
-ping -c 4 baidu.com
-```
-
-查看端口占用：
-
-```bash
-ss -tulnp
-```
-
----
-
-## 16. RTSP 播放测试
-
-板端推流后，在 PC 或板端测试：
-
-```bash
-ffplay rtsp://BOARD_IP:8554/live
-```
-
-VLC 播放地址：
-
-```text
-rtsp://BOARD_IP:8554/live
-```
-
----
-
-## 17. UDP/RTP 调试
-
-监听 UDP：
-
-```bash
-nc -ul 5004
-```
-
-抓包：
-
-```bash
-sudo tcpdump -i eth0 udp port 5004
-```
-
----
-
-## 18. 性能监控
-
-CPU：
-
-```bash
-top
 htop
-pidstat -p <pid> 1
+# 或者使用 pidstat 对推流进程做每秒统计
+pidstat -p $(pgrep visioncast) 1
 ```
 
-内存：
-
-```bash
-free -h
-cat /proc/<pid>/status | grep -E "VmRSS|VmSize"
-```
-
-温度：
-
+### 5.2 监控 SoC 硬件核心实时温度
 ```bash
 find /sys/class/thermal -name temp -exec sh -c 'echo "$1: $(cat $1)"' _ {} \;
 ```
 
-磁盘：
-
+### 5.3 监控网络实时流量/码率
 ```bash
-df -h
-du -sh *
+ifstat 1
+# 或者使用 sar 统计 eth0 网口流量
+sar -n DEV 1
+```
+
+### 5.4 查看流媒体端口占用情况
+```bash
+ss -tulnp | grep -E "1936|8891|8555"
 ```
 
 ---
 
-## 19. 项目构建相关
+## 6. 完工结论与运维指引
 
-本地构建：
-
-```bash
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc)
-```
-
-清理：
-
-```bash
-rm -rf build/*
-```
-
----
-
-## 20. 当前调试优先级
-
-当前最优先执行：
-
-```bash
-media-ctl -p -d /dev/media0
-media-ctl -p -d /dev/media1
-```
-
-然后执行：
-
-```bash
-for i in {11..17}; do
-    echo "===== /dev/video$i ====="
-    v4l2-ctl -d /dev/video$i -D
-    v4l2-ctl -d /dev/video$i --list-formats-ext
-done
-```
-
-目标：
-
-```text
-确认 13855 最终从哪个 /dev/videoX 输出。
-```
-
----
-
-## 21. 当前结论
-
-1. VisionCast 当前优先确认 13855 输出节点；
-2. 音频默认使用 NAU8822 `hw:1,0`；
-3. USB C270 可作为视频备用输入；
-4. USB C270 麦克风当前不可用；
-5. MPP/RGA/RKAIQ 路径需要进一步确认；
-6. 首版目标是 RTSP/RTP 推流闭环。
+1. **零手工配置**：系统启动与运行已通过环境变量与配置文件实现自动化。如遇到音视频断续或无声，可使用本文档第 3 节的 amixer 命令与 arecord 验证硬件健康度。
+2. **多协议拉流端接入**：
+   - WebRTC WHIP 拉流：浏览器直接访问 `http://BOARD_IP:8891/live/stream`。
+   - RTMP 拉流：`ffplay rtmp://BOARD_IP:1936/live/stream`。
+   - RTSP 拉流：`ffplay rtsp://BOARD_IP:8555/live`。
+   - RTP over UDP 拉流：将板端生成的 `test.sdp` 拷贝至 PC 并运行 `ffplay -protocol_whitelist file,rtp,udp test.sdp`。

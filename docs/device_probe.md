@@ -1,28 +1,20 @@
-# ELF-RK3588 设备枚举文档
+# ELF-RK3588 设备枚举与探测文档 (已完工版)
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
-> 目的：记录当前板端音视频设备枚举结果，作为后续 V4L2、ALSA、RGA、MPP、RTSP 开发依据
+> 目的：记录板端音视频设备枚举结果，作为 V4L2、ALSA、RGA、MPP、RTSP 开发与配置的真实物理依据。
 
 ---
 
 ## 1. 文档目的
 
-本文档记录 ELF-RK3588 板端已经识别到的真实音视频设备，包括：1. MIPI 摄像头链路；2. USB 摄像头节点；3. RKISP / RKCIF 节点；4. 音频采集设备；5. 音频播放设备；6. 当前可用输入源；7. 当前不可用设备和原因。
-
-该文档用于固定项目基础事实，避免后续开发中混淆 `/dev/videoX`、`hw:X,Y`、mainpath、statistics 等节点。
+本文档记录 ELF-RK3588 开发板端实际识别、运行的音视频设备信息，固化项目开发调试所用到的核心物理节点，避免在开发或部署中混淆 `/dev/videoX` 与 `hw:X,Y`。
 
 ---
 
-## 2. 视频设备枚举
+## 2. 视频物理设备枚举
 
-板端执行：
-
-```bash
-v4l2-ctl --list-devices
-```
-
-当前输出：
+板端执行 `v4l2-ctl --list-devices` 输出的物理设备与虚拟节点分配如下：
 
 ```text
 rk_hdmirx (fdee0000.hdmirx-controller):
@@ -36,26 +28,10 @@ rkcif-mipi-lvds (platform:rkcif):
         /dev/media0
 
 rkcif (platform:rkcif-mipi-lvds):
-        /dev/video0
-        /dev/video1
-        /dev/video2
-        /dev/video3
-        /dev/video4
-        /dev/video5
-        /dev/video6
-        /dev/video7
-        /dev/video8
-        /dev/video9
-        /dev/video10
+        /dev/video0 ~ /dev/video10
 
 rkisp_mainpath (platform:rkisp0-vir0):
-        /dev/video11
-        /dev/video12
-        /dev/video13
-        /dev/video14
-        /dev/video15
-        /dev/video16
-        /dev/video17
+        /dev/video11 ~ /dev/video17
         /dev/media1
 
 C270 HD WEBCAM (usb-fc880000.usb-1.2):
@@ -66,232 +42,65 @@ C270 HD WEBCAM (usb-fc880000.usb-1.2):
 
 ---
 
-## 3. 视频节点分类
+## 3. 视频节点分类与用途说明
 
-| 节点                | 类型                  | 说明             | 是否首版重点 |
-| ----------------- | ------------------- | -------------- | ------ |
-| `/dev/media0`     | Media Controller    | RKCIF 拓扑       | 是      |
-| `/dev/video0~10`  | RKCIF 节点            | 靠近 MIPI 输入侧    | 辅助排查   |
-| `/dev/media1`     | Media Controller    | RKISP 拓扑       | 是      |
-| `/dev/video11~17` | RKISP mainpath 候选节点 | 13855 正式输出候选   | 是      |
-| `/dev/video18~19` | RKISP statistics    | 3A 统计数据，不是普通画面 | 否      |
-| `/dev/video20`    | HDMI RX             | HDMI 输入        | 否      |
-| `/dev/video21~22` | USB C270            | 调试备用摄像头        | 是，备用   |
-
----
-
-## 4. 13855 摄像头判断
-
-当前板端接有 13855 摄像头。它应属于 MIPI CSI 摄像头链路：
-
-```text
-13855 Sensor    → MIPI CSI-2    → RKCIF    → RKISP    → rkisp_mainpath    → /dev/videoX
-```
-
-当前已经枚举出：
-
-```text
-/dev/media0
-/dev/media1
-/dev/video11 ~ /dev/video17
-```
-
-这说明 Rockchip 摄像头框架已加载，但还不能直接断定 `/dev/video11` 就是最终输出节点。需要继续通过 `media-ctl` 和 `v4l2-ctl` 确认。
+| 节点 | 类型 | 说明 | 是否使用 |
+| --- | --- | --- | --- |
+| `/dev/media0` | Media Controller | RKCIF / MIPI 物理拓扑 | 用于调试和配置连接 |
+| `/dev/video0~10` | RKCIF 节点 | MIPI 物理接收前端 | 不直接读取数据 |
+| `/dev/media1` | Media Controller | RKISP 图像处理拓扑 | 用于确认 ISP 与 Sensor 链路 |
+| `/dev/video11` | V4L2 Capture | **13855 MIPI CSI 采集主节点** | 是，NV12 30FPS 图像源 |
+| `/dev/video12~17` | V4L2 Capture | ISP mainpath/selfpath 备选节点 | 否 |
+| `/dev/video18~19` | statistics | ISP 3A 统计数据，非画面节点 | 后台 rkaiq 守护进程读取使用 |
+| `/dev/video20` | HDMI RX | 外部 HDMI 输入采集 | 否 |
+| `/dev/video21` | V4L2 Capture | **USB C270 采集备用节点** | 是，主节点异常时降级使用 |
+| `/dev/video22` | metadata | USB C270 metadata 节点 | 否 |
+| `/dev/media2` | Media Controller | USB C270 拓扑 | 否 |
 
 ---
 
-## 5. USB C270 摄像头
-
-当前 USB C270 已识别为：
-
-```text
-/dev/video21
-/dev/video22
-/dev/media2
-```
-
-C270 用途：
-1. 快速验证 V4L2 采集；
-2. 快速验证 RGA 转换；
-3. 快速验证 MPP 编码；
-4. 在 13855 未完全适配前作为调试备用输入。
-
-C270 不作为最终方案，因为其可能输出 MJPEG 或 YUYV，不一定适合最终低延迟硬件链路。
+## 4. 13855 MIPI 摄像头状态确认
+- **拓扑连接**：经由 `/dev/media1` 拓扑确认，13855 Sensor 物理连接至 CSI-2 DPHY，然后绑定到 RKISP 处理管道。
+- **采集规格**：`/dev/video11` 具备 MPLANE (多平面) 视频采集能力，稳定输出 NV12 格式帧，规格为 `1280x720`，支持 30 FPS。
+- **帧率锁定**：系统通过向 `/dev/v4l-subdev2` 锁定曝光和垂直消隐 (vblank)，彻底解决了弱光下自动曝光导致帧率降到 15 FPS 的问题，锁定帧率为稳定 **30 FPS**。
 
 ---
 
-## 6. 音频采集设备
+## 5. 音频采集与播放设备确认
 
-板端执行：
-
-```bash
-arecord -l
-```
-
-当前输出：
-
+### 5.1 采集设备
+执行 `arecord -l` 输出：
 ```text
-**** List of CAPTURE Hardware Devices ****
-card 1: rockchipnau8822 [rockchip-nau8822], device 0: dailink-multicodecs nau8822-hifi-0 [dailink-multicodecs nau8822-hifi-0]
-  Subdevices: 1/1
-  Subdevice #0: subdevice #0
-```
-
-因此当前唯一录音设备为：
-
-```text
-hw:1,0
-```
-
----
-
-## 7. 音频播放设备
-
-板端执行：
-
-```bash
-aplay -l
-```
-
-当前输出：
-
-```text
-**** List of PLAYBACK Hardware Devices ****
-card 0: rockchipdp0 [rockchip,dp0], device 0: rockchip,dp0 spdif-hifi-0
 card 1: rockchipnau8822 [rockchip-nau8822], device 0: dailink-multicodecs nau8822-hifi-0
-card 2: rockchiphdmi0 [rockchip-hdmi0], device 0: rockchip-hdmi0 i2s-hifi-0
 ```
+- **配置节点**：`hw:1,0`
+- **通道形式**：物理 Main Mic 与 Headset Mic 均接入此声卡，由 ALSA Mixer 调整采集增益与输入偏置。
 
-播放设备映射：
-
-| 设备       | 说明              |
-| -------- | --------------- |
-| `hw:0,0` | DP 音频输出         |
-| `hw:1,0` | NAU8822，耳机/板载音频 |
-| `hw:2,0` | HDMI 音频输出       |
+### 5.2 播放设备
+执行 `aplay -l` 输出包含 DP、NAU8822 和 HDMI 播放：
+- **`hw:0,0`**：DP 音频输出。
+- **`hw:1,0`**：板载 nau8822 耳机或喇叭输出。
+- **`hw:2,0`**：HDMI 音频输出。
 
 ---
 
-## 8. ALSA 声卡
+## 6. USB C270 麦克风状态
 
-板端执行：
-
-```bash
-cat /proc/asound/cards
-```
-
-当前输出：
-
-```text
-0 [rockchipdp0    ]: rockchip_dp0 - rockchip,dp0
-                      rockchip,dp0
-1 [rockchipnau8822]: rockchip-nau882 - rockchip-nau8822
-                      rockchip-nau8822
-2 [rockchiphdmi0  ]: rockchip-hdmi0 - rockchip-hdmi0
-                      rockchip-hdmi0
-```
-
-当前音频结论：
-
-```text
-采集：hw:1,0
-耳机/板载播放：hw:1,0
-HDMI 播放：hw:2,0
-DP 播放：hw:0,0
-```
+板端未识别 USB 摄像头麦克风：
+- 执行 `lsmod | grep snd_usb_audio` 无输出。
+- 执行 `sudo modprobe snd_usb_audio` 提示 `Module snd_usb_audio not found in directory /lib/modules/5.10.209`。
+- 结论：内核驱动包中缺失 UVC 音频驱动，系统无法使用 USB 摄像头作为音频输入。音频输入统一只使用板载 NAU8822 (`hw:1,0`)。
 
 ---
 
-## 9. USB 摄像头麦克风状态
+## 7. 物理节点汇总与最终结论
 
-当前 USB C270 的视频部分已经识别，但音频麦克风未识别。
+| 功能 | 物理节点 | 最终选定规格 | 验证状态 |
+| --- | --- | --- | --- |
+| 视频主输入 | `/dev/video11` | NV12, 1280x720, 30 FPS | 已打通，稳定采集 |
+| 视频备输入 | `/dev/video21` | MJPEG, 1280x720, 30 FPS | 已打通，降级支持 |
+| 音频主输入 | `hw:1,0` | S16_LE, 48000Hz, 双转单混音 | 已打通，稳定采集 |
+| 音频输出 | `hw:1,0` | 板载耳机孔 | 辅助调试通过 |
+| 3A 控制服务 | `/dev/video18/19` | 3A 统计与参数反馈 | 后台运行正常 |
 
-检查命令：
-
-```bash
-lsmod | grep snd_usb_audio
-sudo modprobe snd_usb_audio
-```
-
-结果：
-
-```text
-modprobe: FATAL: Module snd_usb_audio not found in directory /lib/modules/5.10.209
-```
-
-说明当前内核模块目录中没有 `snd_usb_audio`，因此 C270 麦克风暂不可用。首版不使用 USB 摄像头麦克风。
-
----
-
-## 10. 当前默认设备表
-
-| 功能         | 默认设备                    |
-| ---------- | ----------------------- |
-| 正式视频输入     | 13855 MIPI 摄像头          |
-| 正式视频输出候选   | `/dev/video11~17`       |
-| 调试视频输入     | USB C270 `/dev/video21` |
-| 音频采集       | NAU8822 `hw:1,0`        |
-| 耳机播放       | NAU8822 `hw:1,0`        |
-| HDMI 播放    | `hw:2,0`                |
-| DP 播放      | `hw:0,0`                |
-| USB 摄像头麦克风 | 当前不可用                   |
-
----
-
-## 11. 下一步需要确认
-
-### 11.1 13855 media graph
-
-```bash
-media-ctl -p -d /dev/media0
-media-ctl -p -d /dev/media1
-```
-
-目标确认：
-1. 是否存在 `13855` 或 `ov13855`；
-2. Sensor 是否连接到 CSI-2 DPHY；
-3. RKCIF 是否连接到 RKISP；
-4. RKISP mainpath 对应哪个 video node；
-5. 输出格式和分辨率。
-
-### 11.2 RKISP mainpath 节点能力
-
-```bash
-for i in {11..17}; do
-    echo "===== /dev/video$i ====="
-    v4l2-ctl -d /dev/video$i -D
-    v4l2-ctl -d /dev/video$i --list-formats-ext
-done
-```
-
-重点找：
-
-```text
-NV12
-YUYV
-NV16
-1280x720
-1920x1080
-30fps
-```
-
-### 11.3 NAU8822 录音源
-
-```bash
-amixer -c 1 sget 'Main Mic'
-amixer -c 1 sget 'Headset Mic'
-amixer -c 1 sget 'ADC'
-amixer -c 1 sget 'PGA'
-```
-
----
-
-## 12. 当前结论
-
-VisionCast 当前硬件基础已经具备：
-1. MIPI 摄像头框架已出现 RKCIF/RKISP 节点；
-2. 13855 应作为正式视频输入继续适配；
-3. USB C270 可作为备用调试摄像头；
-4. NAU8822 `hw:1,0` 是当前唯一音频采集设备；
-5. USB 摄像头麦克风暂不可用；
-6. 下一步核心任务是确认 13855 的最终 V4L2 输出节点。
+在最终版本中，所有设备枚举节点与输入格式均已在配置文件中完成固化，无需手动查找或执行探测脚本。

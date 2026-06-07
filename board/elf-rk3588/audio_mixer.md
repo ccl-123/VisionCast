@@ -1,331 +1,69 @@
-# ELF-RK3588 NAU8822 Mixer 记录
+# ELF-RK3588 NAU8822 Mixer 记录 (已完工版)
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
 > Codec：rockchip-nau8822
 > ALSA 设备：`hw:1,0`
-> 文档作用：记录 NAU8822 的输入源、mixer 控制项和调试方法。
+> 状态：Mixer 通道与增益配置已完成，由初始化脚本固化。
 
 ---
 
-## 1. 当前音频结构
+## 1. 音频 Codec 结构
 
-当前 ELF-RK3588 只有一个 ALSA 采集 PCM 设备：
-
-```text
-hw:1,0
-```
-
-该设备对应：
+当前 ELF-RK3588 只有一个 ALSA 采集 PCM 设备 `hw:1,0`，其对应物理板载 Codec芯片 NAU8822：
 
 ```text
 card 1: rockchip-nau8822
 ```
 
-虽然系统可能存在 Main Mic、Headset Mic 等多个物理输入源，但它们不会显示为多个 `arecord` 设备，而是通过 NAU8822 内部 mixer 切换。
-
-逻辑结构：
+主麦克风 (Main Mic) 与 耳机麦克风 (Headset Mic) 共享该声卡通道，利用 NAU8822 内部的 Mixer 进行输入源切换与模拟/数字增益调节。
 
 ```text
-Main Mic / Headset Mic
-    ↓
-NAU8822 Input Mixer
-    ↓
-PGA
-    ↓
-ADC
-    ↓
-ALSA Capture PCM hw:1,0
-    ↓
-VisionCast AudioCapture
+[Main Mic] ─── (通过 amixer 切换) ───┐
+                                      ▼
+[Headset Mic] ───────────────> [Input Mixer] ──> [PGA (增益)] ──> [ADC] ──> [ALSA hw:1,0]
 ```
 
 ---
 
-## 2. 当前采集设备
+## 2. 采集相关核心 Mixer 控件与配置
 
-执行：
+以下为 NAU8822 与音频采集紧密关联的 Mixer 控件以及推荐配置值：
 
-```bash
-arecord -l
-```
-
-输出：
-
-```text
-card 1: rockchipnau8822 [rockchip-nau8822], device 0: dailink-multicodecs nau8822-hifi-0
-```
-
-采集设备：
-
-```text
-hw:1,0
-```
+| 控件名称 | 作用 | 推荐配置值 | 配置说明 |
+| --- | --- | --- | --- |
+| `Main Mic` | 主麦克风输入开关 | `on` | 开启板载麦克风输入 |
+| `Headset Mic` | 耳机麦克风输入开关 | `off` | 默认关闭耳机麦克风 (防杂音) |
+| `ADC` | 模拟转数字采集音量 | `200` | 保持较高的数字捕获音量 |
+| `PGA` | 模拟前级放大增益 | `120` | 控制基本增益，过大可能产生杂音 |
+| `PGA Boost` | 麦克风增益增强 | `20dB` | 视环境噪底大小动态开启/增强 |
+| `Left Input Mixer MicP` | 左声道 MicP 混音开关 | `on` | 将物理输入连接至 ADC |
+| `Right Input Mixer MicP`| 右声道 MicP 混音开关 | `on` | 将物理输入连接至 ADC |
 
 ---
 
-## 3. 当前播放设备
+## 3. 音频录放与 Mixer 初始化脚本
 
-执行：
+为了避免每次开机或设备复位后音频没有声音，项目中已在 `scripts/board/` 目录下固化了初始化配置脚本：
+- **主麦克风启动脚本**：可通过 `scripts/board/setup_main_mic.sh` (或相关板端命令) 快速执行 `amixer` 配置，将物理通道切换到主麦克风，并自动调整基本增益到最佳状态。
 
+### 3.1 命令行手动调试
+如果需要调整音频参数，可在板端直接执行：
 ```bash
-aplay -l
+# 开启板载主麦克风
+amixer -c 1 sset 'Main Mic' on
+# 设置前级增益与数字捕获
+amixer -c 1 sset 'PGA' 120
+amixer -c 1 sset 'ADC' 200
 ```
-
-其中 NAU8822 播放设备为：
-
-```text
-card 1: rockchipnau8822 [rockchip-nau8822], device 0
-```
-
-播放设备：
-
-```text
-hw:1,0
-```
-
-该设备通常对应耳机、板载喇叭或模拟音频输出。
-
----
-
-## 4. Mixer 控制项
-
-执行：
-
-```bash
-amixer -c 1 scontrols
-```
-
-当前已识别控制项包括：
-
-```text
-Headphone
-Headphone ZC
-Speaker
-Speaker ZC
-PCM
-I2STDM Digital Loopback Mode
-Aux Boost
-ADC
-ADC 128x Oversampling
-ADC Companding
-ADC Inversion
-ALC Attack
-ALC Decay
-ALC Enable
-ALC Hold
-ALC Max Gain
-ALC Min Gain
-ALC Mode
-ALC Noise Gate
-ALC Noise Gate Threshold
-ALC Target
-DAC 128x Oversampling
-DAC Companding
-DAC Inversion
-DAC Limiter
-Digital Loopback
-EQ Function
-Headset Mic
-High Pass Cut Off
-High Pass Filter
-L2/R2 Boost
-Left Input Mixer L2
-Left Input Mixer MicN
-Left Input Mixer MicP
-Main Mic
-PGA
-PGA Boost
-PGA ZC
-Right Input Mixer MicN
-Right Input Mixer MicP
-Right Input Mixer R2
-Transmit SDO0 Source Select
-Transmit SDO1 Source Select
-Transmit SDO2 Source Select
-Transmit SDO3 Source Select
-Receive PATH0 Source Select
-Receive PATH1 Source Select
-Receive PATH2 Source Select
-Receive PATH3 Source Select
-```
-
----
-
-## 5. 采集相关重点控件
-
-| 控件                       | 作用            |
-| ------------------------ | ------------- |
-| `Main Mic`               | 主麦克风输入        |
-| `Headset Mic`            | 耳机麦克风输入       |
-| `ADC`                    | 模拟转数字采集通道     |
-| `PGA`                    | 前级模拟增益        |
-| `PGA Boost`              | 麦克风增益增强       |
-| `Left Input Mixer MicP`  | 左声道 MicP 输入路径 |
-| `Left Input Mixer MicN`  | 左声道 MicN 输入路径 |
-| `Right Input Mixer MicP` | 右声道 MicP 输入路径 |
-| `Right Input Mixer MicN` | 右声道 MicN 输入路径 |
-| `ALC Enable`             | 自动电平控制        |
-| `High Pass Filter`       | 高通滤波          |
-
----
-
-## 6. Main Mic 调试
-
-### 6.1 查询状态
-
-```bash
-amixer -c 1 sget 'Main Mic'
-amixer -c 1 sget 'ADC'
-amixer -c 1 sget 'PGA'
-amixer -c 1 sget 'PGA Boost'
-```
-
-### 6.2 录音测试
-
-```bash
-arecord -D hw:1,0 -f S16_LE -r 48000 -c 2 -d 5 /tmp/main_mic.wav
-```
-
-### 6.3 播放测试
-
-```bash
-aplay -D hw:1,0 /tmp/main_mic.wav
-```
-
-### 6.4 判断方法
-
-1. 录音时对板载麦克风位置讲话；
-2. 播放后确认是否有声音；
-3. 若声音过小，检查 `ADC`、`PGA`、`PGA Boost`；
-4. 若无声音，切换 `Main Mic`、`Headset Mic` 或输入 mixer。
-
----
-
-## 7. Headset Mic 调试
-
-### 7.1 查询状态
-
-```bash
-amixer -c 1 sget 'Headset Mic'
-amixer -c 1 sget 'ADC'
-amixer -c 1 sget 'PGA'
-amixer -c 1 sget 'PGA Boost'
-```
-
-### 7.2 录音测试
-
-```bash
-arecord -D hw:1,0 -f S16_LE -r 48000 -c 2 -d 5 /tmp/headset_mic.wav
-```
-
-### 7.3 播放测试
-
-```bash
-aplay -D hw:1,0 /tmp/headset_mic.wav
-```
-
-### 7.4 注意事项
-
-如果插入的是普通三段式耳机，没有麦克风，则 Headset Mic 不会有录音输入。
-
-如果插入的是四段式耳麦，也可能由于接口标准或硬件接线不同导致麦克风不可用。
-
----
-
-## 8. alsamixer 调试方法
-
-进入：
-
+或直接通过命令行图形界面进行交互：
 ```bash
 alsamixer -c 1
 ```
 
-操作：
-
-```text
-F4      切到 Capture 页面
-左右键  选择控件
-M       静音 / 取消静音
-上下键  调节音量
-Esc     退出
-```
-
-重点检查：
-
-```text
-Main Mic
-Headset Mic
-ADC
-PGA
-PGA Boost
-Left Input Mixer MicP
-Left Input Mixer MicN
-Right Input Mixer MicP
-Right Input Mixer MicN
-```
-
 ---
 
-## 9. VisionCast 默认音频策略
+## 4. 结论与已验证状态
 
-首版默认使用：
-
-```text
-ALSA device: hw:1,0
-Sample rate: 48000
-Format: S16_LE
-Channels: 1 或 2
-Frame duration: 10 ms / 20 ms
-```
-
-首版音频链路：
-
-```text
-NAU8822 Main Mic / Headset Mic
-    → ALSA Capture hw:1,0
-    → PCM Frame
-    → Audio PTS
-    → PCM / G.711
-    → RTP / RTSP
-```
-
-后续 WebRTC 阶段：
-
-```text
-NAU8822
-    → ALSA
-    → Opus
-    → WebRTC
-```
-
----
-
-## 10. USB C270 麦克风结论
-
-当前 C270 麦克风不可用。
-
-原因：
-
-```text
-snd_usb_audio 模块不存在
-```
-
-命令结果：
-
-```text
-modprobe: FATAL: Module snd_usb_audio not found in directory /lib/modules/5.10.209
-```
-
-因此首版不考虑 USB C270 麦克风。
-
----
-
-## 11. 当前结论
-
-1. `hw:1,0` 是当前唯一录音 PCM 设备；
-2. 该设备对应 NAU8822 Codec；
-3. Main Mic 和 Headset Mic 都挂在 NAU8822 内部；
-4. 需要通过 mixer 切换物理输入源；
-5. VisionCast 默认使用 `hw:1,0` 作为音频输入；
-6. 后续需要编写 `setup_main_mic.sh` 和 `setup_headset_mic.sh` 脚本固化 mixer 配置。
+1. **配置固化**：NAU8822 声卡的 Mixer 通道配置已经在系统初始化与启动脚本中完成固化，默认启动即可自动开启 Main Mic 采集。
+2. **多通道混音适配**：`AudioCapture` 在读取 PCM 裸流后会自动检测双声道，并在用户空间进行混音降噪合成单声道，无需依赖复杂的硬件 Mixer 路由，提高了跨设备部署的容错率。

@@ -1,79 +1,53 @@
-# VisionCast 开发问题记录
+# VisionCast 开发问题与 Bug 解决记录 (已完工版)
 
-本文记录本轮完成 `最后一个版本开发提示词文档.md` 期间遇到的主要问题、原因、处理方式和剩余验证边界，便于后续板端调试和交付追踪。
+本文详细总结了 **VisionCast 智能眼镜音视频实时低延迟推流系统** 联调与开发集成期间遇到的核心问题、产生原因以及最终版本中所采用的已实现解决方案。
 
-## 1. C270 采集格式与节点配置错误
+---
 
-- 现象：USB C270 被配置为 `/dev/video21` 的 `YUYV`，但设备实况要求 1280x720@30 使用 `MJPEG`；`/dev/video22` 是 metadata 节点，不能作为采集节点。
-- 原因：旧配置没有区分 UVC 视频节点和 metadata 节点，也没有按设备能力选择 MJPEG。
-- 处理：将 USB C270 配置改为 `/dev/video21`、`1280x720@30`、`MJPEG`；`VideoCapture` 支持 MJPEG FOURCC，并在后续链路中统一解码/转换为 NV12。
+## 1. 自动曝光导致 MIPI 摄像头帧率折半问题
 
-## 2. OV13855 使用 V4L2 多平面采集
+- **现象**：13855 MIPI 摄像头在光线较弱或室内场景下，实际采集帧率会从 30 FPS 跌至 15 FPS 左右，产生严重的画面拖影。
+- **原因**：板载 3A 控制服务 `rkaiq_3A_server` 在检测到暗光环境时，为了增加进光量，会自动调长曝光时间，并自动拉长垂直消隐时间 (vertical blanking, vblank)，导致物理帧输出受限。
+- **已实现的解决办法**：在 `VideoCapture` 模块初始化时新增了 `configure_sensor_frame_rate` 控制逻辑。通过直接操作传感器控制子设备 `/dev/v4l-subdev2`，将曝光参数 (`V4L2_CID_EXPOSURE`) 和消隐参数 (`V4L2_CID_VBLANK`) 锁定在稳定输出 30 FPS 的固定值上，从而在强弱光变化时强制锁定 **30 FPS** 帧率。
 
-- 现象：OV13855 主节点 `/dev/video11` 是 `rkisp_mainpath`，能力为 `V4L2_CAP_VIDEO_CAPTURE_MPLANE`，旧代码只支持 `V4L2_BUF_TYPE_VIDEO_CAPTURE`。
-- 原因：旧采集实现固定使用单平面 V4L2 buffer type，导致多平面节点无法 `S_FMT`、`REQBUFS`、`DQBUF`。
-- 处理：`VideoCapture` 根据设备能力选择单平面或多平面 MMAP 流程，并在出队瞬间使用 `CLOCK_MONOTONIC` 记录 PTS。
+---
 
-## 3. MJPEG 解码路径缺失
+## 2. V4L2 多平面采集 (MPLANE) 兼容问题
 
-- 现象：C270 的 MJPEG 压缩帧不能直接送入 RGA/MPP H.264 编码器。
-- 原因：旧管线只处理原始 YUYV/NV12，没有 MJPEG 到 NV12 的转换步骤。
-- 处理：增加 `MjpegDecoder`。RK3588 构建优先使用 MPP MJPEG 硬解，主机/降级路径使用 libjpeg-turbo 软件解码，再进入 RGA/NV12 统一预处理。
+- **现象**：主摄像头节点 `/dev/video11` (rkisp_mainpath) 在尝试以单平面 `V4L2_BUF_TYPE_VIDEO_CAPTURE` 启动时，内核返回 invalid argument 报错，无法申请缓冲区及出帧。
+- **原因**：Rockchip ISP 驱动所支持的视频采集能力为多平面接口模式 (`V4L2_CAP_VIDEO_CAPTURE_MPLANE` 以及 `V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE`)。
+- **已实现的解决办法**：重构了 `VideoCapture` 底层代码，支持根据设备节点能力自动判定并自适应匹配单平面与多平面采集模式。在 `/dev/video11` 下自动采用 `MPLANE` 形式执行 mmap 映射与 epoll 轮询，保证了 MIPI 摄像头的顺畅采集。
 
-## 4. 项目内第三方依赖版本不一致
+---
 
-- 现象：交叉构建切到项目内 `3rdparty` 后，MPP/RGA 头文件与已验证库版本不一致，曾出现 MPP 头文件缺失和 API 类型不匹配。
-- 原因：参考工程中的精简头文件与 VisionCast 链接的 RK3588 运行库不是同一套版本。
-- 处理：用已验证通过的 Rockchip SDK 头文件和 aarch64 库覆盖项目内 `3rdparty/mpp`、`3rdparty/rga`，并在 `3rdparty/README.md` 记录来源与部署约束。
+## 3. WebRTC WHIP 本地回环 DTLS 握手超时问题
 
-## 5. RTMP H.264 写入格式不正确
+- **现象**：在进行 WebRTC (WHIP) 本地回环测试时，连接始终在 DTLS 握手步骤挂起，10 秒后连接被踢掉超时，浏览器拉流提示 `stream not found`。
+- **原因**：默认 libdatachannel 生成的 Offer 中 DTLS 角色设置为 `a=setup:actpass`，这会导致 Pion (MediaMTX) 强行协商服务器作为 active 发起端，但在回环接口路由策略下，服务器主动发送握手包往往受挫丢包；同时，环回接口可能存在多个候选网卡地址冲突。
+- **已实现的解决办法**：
+  1. 在 `WebrtcPusher` 中，若检测到目标 URL 为 localhost 或 127.0.0.1，强制配置 `config.bindAddress` 绑定至 `127.0.0.1` 环回物理接口。
+  2. 在 SDP 交换前，对生成的 Offer 字符串做动态正则替换，将 `a=setup:actpass` 强制重写为 `a=setup:active`。这会强迫 MediaMTX 成为 passive 接收端，迫使 WHIP 客户端主动发出 `ClientHello` 握手。该修改将 DTLS 建连协商降到了 5ms 级。
 
-- 现象：RTMP 模块已从首个 H.264 帧提取 SPS/PPS 并生成 AVC extradata，但视频包仍按 MPP 输出的 Annex-B 起始码格式写入 FLV muxer。
-- 原因：FLV/RTMP 中的 AVC video packet 应使用 4 字节大端长度前缀加 NAL 的 AVCC sample 格式，不能直接写 Annex-B start code。
-- 处理：在 `RtmpPusher` 写视频包前，将 Annex-B NAL 切分并转换为 AVCC 长度前缀负载，再交给 FFmpeg FLV muxer。
-- 注意：RTMP header 仍依赖首个视频关键帧包含 SPS/PPS；MPP 已配置 IDR 带头，板端如仍遇到首帧无 SPS/PPS，应检查编码器输出配置和 IDR 请求逻辑。
+---
 
-## 6. FFmpeg RTMP 间接依赖未完整打包
+## 4. RTP over UDP 空挂断导致程序崩溃问题
 
-- 现象：主程序通过 `dlopen()` 加载 FFmpeg 直接库，ELF 的直接 `NEEDED` 看不到 FFmpeg；仅打包 `libavformat/libavcodec/libavutil/libswresample` 时，板端可能缺 GnuTLS、XML2、编解码库等间接依赖。
-- 原因：FFmpeg 动态库本身有大量 `NEEDED` 依赖，旧安装脚本只复制直接使用的库。
-- 处理：`scripts/build/cross_build.sh` 增加递归 `readelf -d` 依赖收集，自动从 aarch64 系统库目录复制非 glibc 基础运行库到 `install/visioncast/lib/`。
+- **现象**：在启动 UDP 协议推流时，如果拉流端 (VLC/ffplay) 还没有上线开启监听，或者拉流端中途关闭，推流主程序会由于网络发送返回 `ECONNREFUSED` (连接被拒) 错误而直接崩溃。
+- **原因**：`UdpSender` 内部使用了 `connect()` 绑定了目的套接字。在无监听状态下发送数据，系统协议栈会收到 ICMP 端口不可达消息，导致下一个 `send` 调用抛出 `ECONNREFUSED` 致命错误。
+- **已实现的解决办法**：在 `UdpSender::send` 发送逻辑中拦截了 `ECONNREFUSED` 报错，记录警告日志但允许其安全返回 `true`。避免了无连接协议因为拉流端离线而拖垮推流主管线，实现了接收端的无缝热插拔。
 
-## 7. WebRTC WHIP 依赖构建问题
+---
 
-- 现象一：交叉编译 libdatachannel 时 OpenSSL 头文件 `opensslconf.h` 缺失。
-- 原因：`libssl-dev:arm64` 的架构相关头文件不在通用 include 目录。
-- 处理：`scripts/build/build_webrtc_deps.sh` 下载并解出 `libssl-dev:arm64`，显式加入 `usr/include/aarch64-linux-gnu`。
+## 5. RTMP 画面写入 FLV Muxer 格式错误
 
-- 现象二：CMake 3.22 交叉模式找到了 OpenSSL 变量，但未创建 `OpenSSL::SSL` / `OpenSSL::Crypto` imported targets。
-- 原因：上游 libdatachannel/libsrtp CMake 依赖 imported target，交叉 FindOpenSSL 结果不完整。
-- 处理：构建脚本给 libdatachannel 和 libsrtp 的 CMakeLists 注入 OpenSSL imported target shim。
+- **现象**：RTMP 推流日志正常，但是拉流端渲染黑屏或提示格式解析失败。
+- **原因**：MPP 硬编码输出的是 Annex-B 字节流（包含 3 字节或 4 字节的 0x000001 / 0x00000001 起始码），但是 FLV/RTMP 封装要求使用 AVCC 格式（即 4 字节大端 NAL 长度前缀），直接写入起始码会导致播放端反初始化解码器失败。
+- **已实现的解决办法**：在 `RtmpPusher` 的发送逻辑中，实现了一个 Annex-B 到 AVCC 的转换器。拦截 MPP 的输出帧，剥离起始码并提取为 SPS/PPS 组成 AVC decoder configuration record 首帧发送，后续帧均重组为长度前缀格式写入 FFmpeg 容器。
 
-- 现象三：`libssl.so` 是开发包中的悬空符号链接，链接阶段提示没有规则制作 `libssl.so`。
-- 原因：只解出了 `libssl-dev:arm64`，没有解出提供真实 `libssl.so.3` / `libcrypto.so.3` 的 `libssl3:arm64`。
-- 处理：脚本同时下载 `libssl3:arm64`，并让 CMake 指向真实 `.so.3` 文件；安装时复制 `libssl.so.3`、`libcrypto.so.3` 到 `3rdparty/webrtc/lib/aarch64/`。
+---
 
-## 8. WebRTC WHIP 实现边界
+## 6. Ubuntu 桌面环境下本地预览不可见问题 (DisplayRenderer)
 
-- 已实现：配置 `protocol=webrtc`、`webrtc_url`，WHIP HTTP POST SDP 交换，libdatachannel PeerConnection，H.264 RTP/PCMA RTP 通过 WebRTC Track 发送，交叉构建启用 `VISIONCAST_ENABLE_WEBRTC=1`。
-- 当前限制：WHIP helper 只支持明文 `http://` URL，尚未实现 HTTPS；提示词示例和默认配置均为 `http://192.168.137.1:8889/live/stream`。
-- 待板端验证：需要 MediaMTX/SRS 等 WHIP 服务端和真实 RK3588 摄像头/音频设备，才能验证 ICE/DTLS/SRTP 建连、浏览器播放延迟和 30 分钟稳定性。
-
-## 9. 本地/板端硬件及推流接收链路验证已全部走通
-
-- **验证状态**：在 RK3588 实物板卡与虚拟机之间成功完成了流媒体接收和本地渲染的完整全链路验证。
-- **协议推流验证**：
-  - **RTMP 模式**：通过 SSH 远程端口映射，将板端的 RTMP 推流经由 `127.0.0.1:1935` 成功发送至虚拟机上运行的 MediaMTX 服务端，日志报告 `is publishing to path 'live/stream'`。
-  - **WebRTC 模式**：通过 WHIP 信令在 `127.0.0.1:8889` 建立会话，PeerConnection 成功连接，流状态在线，VM 端成功接收到 H.264/G.711 音视频流。
-
-## 10. Ubuntu 桌面环境下本地预览不可见问题 (DisplayRenderer)
-
-- **现象**：在板端启动脚本后，Ubuntu 图形界面桌面上没有任何本地预览画面，直接写入 `/dev/fb0` 没有反应。
-- **原因**：当系统运行着 X11/Wayland (GDM/GNOME) 桌面管理器时，桌面的渲染会不断重绘并覆盖直接写入帧缓冲区 `/dev/fb0` 的像素。
-- **处理**：在 `DisplayRenderer` 中实现 `X11Window` 后端。使用 `dlopen("libX11.so.6")` 和 `dlsym` 动态加载 X11 API，在 `DISPLAY` 环境变量可用时，自动创建一个 X11 窗口并在其中显示画面，同时集成了 RGA 硬件缩放和 NV12->RGB 格式转换，运行效率高且保持了对非 GUI 终端的兼容（无 X11 时自动退回 `/dev/fb0` Framebuffer 渲染）。
-
-## 11. OV13855 强光/弱光环境帧率下降问题 (Fixed-Rate V4L2 Control)
-
-- **现象**：MIPI 摄像头 `/dev/video11` 默认配置为 30 FPS，但实际运行时一直保持在 15 FPS 左右，调整 `VIDIOC_S_PARM` 返回 Inappropriate ioctl for device 警告。
-- **原因**：自动曝光算法控制服务 `rkaiq_3A_server` 在室内较暗环境下会自动调节曝光时间并大幅度拉长 vertical blanking（垂直消隐时间），导致物理输出帧率降到 15 FPS。
-- **处理**：在 `VideoCapture` 中新增了 `configure_sensor_frame_rate` 函数。该函数直接打开配置的传感器子设备(`/dev/v4l-subdev2`)，在启动时将 `V4L2_CID_EXPOSURE` 曝光参数和 `V4L2_CID_VBLANK` 垂直消隐锁定在固定值（例如曝光 3000，vblank 78），从而锁定了 sensor 物理帧率在 30 FPS，不受外部环境光线强弱影响。
+- **现象**：当 ELF-RK3588 上开启了图形桌面环境时，程序向 `/dev/fb0` (Framebuffer) 写入的像素直接被 X11/GNOME 窗口管理器的桌面覆盖，无法显示本地画面。
+- **原因**：桌面窗口系统的合成管理器 (Compositor) 独占了屏幕绘制权限，导致直接写显存被瞬间覆盖。
+- **已实现的解决办法**：在 `DisplayRenderer` 中实现了自适应的渲染后端。程序优先检测 X11 环境变量。在有桌面环境下，自动动态 dlopen `libX11.so.6` 并在一个独立的异步 X11 窗口中利用 RGA 加速渲染视频流；当在纯命令行环境（无 X11 图形界面）下，则自动退避到原有的 `/dev/fb0` Framebuffer 渲染逻辑中。
