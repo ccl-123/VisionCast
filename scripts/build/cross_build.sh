@@ -70,6 +70,9 @@ is_system_runtime_lib() {
         ld-linux-aarch64.so.1|libc.so.6|libpthread.so.0|libdl.so.2|librt.so.1|libm.so.6|libresolv.so.2|libnsl.so.1|libutil.so.1)
             return 0
             ;;
+        libasound.so*|libjpeg.so*|libssl.so*|libcrypto.so*|librga.so*|librockchip_mpp.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libswresample.so*)
+            return 0
+            ;;
         *)
             return 1
             ;;
@@ -211,12 +214,6 @@ if [[ "${DO_BUILD}" == true ]]; then
     make -j"$(nproc)"
     make install
 
-    if [[ -f "${MPP_LIB_DIR}/librockchip_mpp.so.1" ]]; then
-        mkdir -p "${PACKAGE_DIR}/lib"
-        cp -f "${MPP_LIB_DIR}/librockchip_mpp.so.1" "${PACKAGE_DIR}/lib/"
-    elif [[ -f "${PACKAGE_DIR}/lib/librockchip_mpp.so" ]]; then
-        ln -sfn librockchip_mpp.so "${PACKAGE_DIR}/lib/librockchip_mpp.so.1"
-    fi
     collect_runtime_dependencies
     echo ""
     echo "========================================"

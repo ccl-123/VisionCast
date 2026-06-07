@@ -132,29 +132,10 @@ install(DIRECTORY scripts/run scripts/board DESTINATION scripts
 )
 install(PROGRAMS scripts/fix_freq_rk3588.sh DESTINATION scripts)
 
-install(DIRECTORY "${THIRDPARTY_DIR}/rga/lib/Linux/aarch64/"
-    DESTINATION lib
-    FILES_MATCHING PATTERN "*.so*"
-)
-install(DIRECTORY "${MPP_LIB_DIR}/"
-    DESTINATION lib
-    FILES_MATCHING PATTERN "*.so*"
-)
-install(DIRECTORY "${FFMPEG_LIB_DIR}/"
-    DESTINATION lib
-    FILES_MATCHING PATTERN "*.so*"
-)
-install(DIRECTORY "${JPEG_LIB_DIR}/"
-    DESTINATION lib
-    FILES_MATCHING PATTERN "*.so*"
-)
-install(DIRECTORY "${ALSA_LIB_DIR}/"
-    DESTINATION lib
-    FILES_MATCHING PATTERN "*.so*"
-)
 if (EXISTS "${WEBRTC_LIB_DIR}")
     install(DIRECTORY "${WEBRTC_LIB_DIR}/"
         DESTINATION lib
-        FILES_MATCHING PATTERN "*.so*"
+        FILES_MATCHING PATTERN "*datachannel.so*"
     )
 endif()
+
