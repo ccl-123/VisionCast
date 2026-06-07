@@ -384,6 +384,15 @@ void VideoCapture::capture_loop() {
             VC_LOG_WARN("video-capture", errno_text("VIDIOC_S_PARM " + device));
         }
 
+        // Disable auto exposure priority (low-light framerate throttling) if supported,
+        // to prevent the webcam driver from lowering the framerate to 15fps.
+        v4l2_control ctrl{};
+        ctrl.id = V4L2_CID_EXPOSURE_AUTO_PRIORITY;
+        ctrl.value = 0;
+        if (ioctl(fd, VIDIOC_S_CTRL, &ctrl) == 0) {
+            VC_LOG_INFO("video-capture", "disabled low-light framerate throttling on " + device);
+        }
+
         v4l2_requestbuffers req{};
         req.count = 4;
         req.type = type;
