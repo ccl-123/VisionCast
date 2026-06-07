@@ -37,7 +37,7 @@ struct EncoderConfig {
 struct StreamConfig {
     std::string protocol = "rtp";
     std::string rtmp_url = "rtmp://192.168.137.1:1935/live/stream";
-    std::string webrtc_url = "http://192.168.137.1:8889/live/stream";
+    std::string webrtc_url = "http://192.168.137.1:8889/live/stream/whip";
     std::string server_ip = "192.168.137.1";
     int video_port = 5004;
     int audio_port = 5006;

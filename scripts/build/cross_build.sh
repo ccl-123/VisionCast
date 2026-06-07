@@ -269,18 +269,43 @@ if [[ "${DO_DEPLOY}" == true ]]; then
     "${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" \
         "mkdir -p '${DEVICE_TARGET_DIR}'"
 
-    echo "  -> 正在传输安装包..."
+    echo "  -> 正在传输基础安装包 (bin, config, scripts)..."
     SCP_ITEMS=(
         "${PACKAGE_DIR}/bin"
         "${PACKAGE_DIR}/config"
         "${PACKAGE_DIR}/scripts"
     )
-    if [[ -d "${PACKAGE_DIR}/lib" ]]; then
-        SCP_ITEMS+=("${PACKAGE_DIR}/lib")
-    fi
     "${SCP_CMD[@]}" -r \
         "${SCP_ITEMS[@]}" \
         "${DEVICE_USER}@${DEVICE_IP}:${DEVICE_TARGET_DIR}/"
+
+    if [[ -d "${PACKAGE_DIR}/lib" ]]; then
+        echo "  -> 正在同步动态链接库 (lib)..."
+        "${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" "mkdir -p '${DEVICE_TARGET_DIR}/lib'"
+        for local_path in "${PACKAGE_DIR}/lib"/*; do
+            if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
+                continue
+            fi
+            filename=$(basename "${local_path}")
+            if [[ -L "${local_path}" ]]; then
+                link_target=$(readlink "${local_path}")
+                remote_link=$("${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" "readlink '${DEVICE_TARGET_DIR}/lib/${filename}'" 2>/dev/null || echo "")
+                if [[ "${remote_link}" != "${link_target}" ]]; then
+                    echo "     [LINK] ${filename} -> ${link_target}"
+                    "${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" "ln -sfn '${link_target}' '${DEVICE_TARGET_DIR}/lib/${filename}'"
+                fi
+            else
+                local_size=$(stat -c %s "${local_path}")
+                remote_size=$("${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" "stat -c %s '${DEVICE_TARGET_DIR}/lib/${filename}'" 2>/dev/null || echo "0")
+                if [[ "${local_size}" != "${remote_size}" ]]; then
+                    echo "     [COPY] ${filename} (${local_size} 字节)"
+                    "${SCP_CMD[@]}" "${local_path}" "${DEVICE_USER}@${DEVICE_IP}:${DEVICE_TARGET_DIR}/lib/${filename}"
+                else
+                    echo "     [SKIP] ${filename} (已存在且大小一致)"
+                fi
+            fi
+        done
+    fi
 
     "${SSH_CMD[@]}" "${DEVICE_USER}@${DEVICE_IP}" \
         "chmod +x '${DEVICE_TARGET_DIR}/bin/visioncast'; find '${DEVICE_TARGET_DIR}/scripts' -type f -name '*.sh' -exec chmod +x {} \\;"

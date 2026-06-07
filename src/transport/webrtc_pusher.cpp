@@ -229,7 +229,8 @@ bool WebRtcPusher::connect(std::string& error) {
         rtc::Configuration config;
         config.disableAutoNegotiation = true;
         config.forceMediaTransport = true;
-        config.iceServers.emplace_back("stun:stun.l.google.com:19302");
+        // 在纯局域网环境下，不需要外网 STUN 服务器，避免因 DNS 解析超时导致启动挂起
+        // config.iceServers.emplace_back("stun:stun.l.google.com:19302");
 
         impl_->pc = std::make_shared<rtc::PeerConnection>(config);
         impl_->pc->onStateChange([this](rtc::PeerConnection::State state) {
