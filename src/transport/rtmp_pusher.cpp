@@ -1,3 +1,12 @@
+/**
+ * @file rtmp_pusher.cpp
+ * @brief VisionCast RTMP 推流客户端模块实现文件
+ * 
+ * 本文件利用 FFmpeg 动态库加载技术（通过 dlopen/dlsym 加载 libavformat/libavcodec/libswresample/libavutil），
+ * 实现了将 H.264 视频流（Annex-B 格式）转换为 RTMP 兼容的 AVCC 格式，
+ * 并将原始 PCM 音频重采样编码为 AAC 格式后推送到 RTMP 服务器。
+ */
+
 #include "transport/rtmp_pusher.h"
 
 #include <algorithm>
@@ -110,6 +119,7 @@ struct FfmpegApi {
             return true;
         }
         close_handles();
+        // 动态加载并定位 FFmpeg 所需动态库 (SO) 以提供 RTMP 封装和 AAC 编码功能
         avutil = dlopen("libavutil.so.56", RTLD_NOW | RTLD_GLOBAL);
         if (avutil != nullptr) {
             swresample = dlopen("libswresample.so.3", RTLD_NOW | RTLD_GLOBAL);
@@ -180,6 +190,7 @@ std::string ffmpeg_error(const char* call, int ret) {
     return std::string(call) + ": " + text;
 }
 
+// 检测 Annex-B 起始码的长度（3字节的 0x000001 或 4字节的 0x00000001）
 std::size_t start_code_size(const std::uint8_t* data,
                             std::size_t size,
                             std::size_t pos) {
@@ -194,6 +205,7 @@ std::size_t start_code_size(const std::uint8_t* data,
     return 0;
 }
 
+// 解析 H.264 Annex-B 码流，寻找所有的 NAL 单元并存入 vector
 std::vector<std::vector<std::uint8_t>> find_nalus(const std::uint8_t* data,
                                                    std::size_t size) {
     std::vector<std::vector<std::uint8_t>> nalus;
@@ -216,6 +228,7 @@ std::vector<std::vector<std::uint8_t>> find_nalus(const std::uint8_t* data,
     return nalus;
 }
 
+// 从首个视频帧中提取 SPS 和 PPS，构建 FLV/RTMP 推流所需的 AVCC Extradata (avcC 头部配置包)
 bool set_avc_extradata(AVCodecParameters* parameters,
                        const std::uint8_t* data,
                        std::size_t size,
@@ -266,6 +279,7 @@ bool set_avc_extradata(AVCodecParameters* parameters,
     return true;
 }
 
+// 将 H.264 Annex-B 编码包（带起始码）转换为 FLV/RTMP 要求的 AVCC 格式数据负载（4字节大端长度前缀 + NALU 数据）
 bool annexb_to_avcc_payload(const std::uint8_t* data,
                             std::size_t size,
                             std::vector<std::uint8_t>& payload,
@@ -302,6 +316,7 @@ bool annexb_to_avcc_payload(const std::uint8_t* data,
     return true;
 }
 
+// 从 AAC 编码器中循环获取已编码的包，并写入 RTMP 输出容器中
 bool write_encoded_audio(RtmpPusher::Impl& impl, std::string& error) {
     AVPacket packet{};
     for (;;) {
@@ -326,6 +341,7 @@ bool write_encoded_audio(RtmpPusher::Impl& impl, std::string& error) {
     }
 }
 
+// 将缓存的 PCM 音频样本进行重采样（SwrContext），送入 AAC 编码器中进行编码并输出
 bool encode_pending_audio(RtmpPusher::Impl& impl, std::string& error) {
     const int frame_samples = impl.audio_encoder->frame_size;
     while (impl.pcm_samples.size() >= static_cast<std::size_t>(frame_samples)) {
@@ -382,14 +398,17 @@ bool RtmpPusher::connect(std::string& error) {
     if (impl_->connected) {
         return true;
     }
+    // 确保 URL 格式符合 RTMP 规范
     if (rtmp_url_.rfind("rtmp://", 0) != 0) {
         error = "invalid RTMP URL: " + rtmp_url_;
         return false;
     }
+    // 动态加载 FFmpeg 库
     if (!ffmpeg().load(error)) {
         return false;
     }
 
+    // 分配 FLV 封装上下文，用于向指定 RTMP 地址推送音视频流
     int ret = ffmpeg().avformat_alloc_output_context2(
         &impl_->format, nullptr, "flv", rtmp_url_.c_str());
     if (ret < 0 || impl_->format == nullptr) {
@@ -540,6 +559,7 @@ bool RtmpPusher::push_video(const std::uint8_t* data,
         error = "RTMP pusher is not connected or video frame is empty";
         return false;
     }
+    // 若尚未写入 FLV 文件头，则先解析 SPS/PPS 提取 extradata，并建立网络连接写入文件头
     if (!impl_->header_written) {
         if (!set_avc_extradata(impl_->video_stream->codecpar, data, size, error)) {
             return false;
@@ -602,6 +622,7 @@ bool RtmpPusher::push_audio(const std::uint8_t* data,
         error = "RTMP pusher is not connected or PCM frame is empty";
         return false;
     }
+    // 缓存原始 PCM 采样，供之后打包为 AAC 编码帧时使用
     const std::size_t sample_count = size / sizeof(std::int16_t);
     const auto* samples = reinterpret_cast<const std::int16_t*>(data);
     impl_->pcm_samples.insert(

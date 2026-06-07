@@ -1,3 +1,11 @@
+/**
+ * @file audio_capture.cpp
+ * @brief VisionCast 音频采集实现文件
+ * @details 实现了基于 ALSA (Advanced Linux Sound Architecture) 的音频数据捕获。
+ *          利用运行时动态链接（dlopen/dlsym）方式加载 `libasound.so.2`，规避编译期硬链接依赖。
+ *          支持多通道音频采集与自动降混（如双声道降混为单声道）。
+ */
+
 #include "media/audio_capture.h"
 
 #include <cstdint>
@@ -16,6 +24,7 @@
 namespace visioncast {
 namespace {
 
+// ALSA 库中的不透明 PCM 句柄结构体前置声明
 struct snd_pcm_t;
 using snd_pcm_stream_t = int;
 using snd_pcm_format_t = int;
@@ -23,13 +32,19 @@ using snd_pcm_access_t = int;
 using snd_pcm_uframes_t = unsigned long;
 using snd_pcm_sframes_t = long;
 
-constexpr snd_pcm_stream_t kSndPcmStreamCapture = 1;
-constexpr snd_pcm_format_t kSndPcmFormatS16Le = 2;
-constexpr snd_pcm_access_t kSndPcmAccessRwInterleaved = 3;
-constexpr int kEpipe = 32;
+// ALSA 常量定义
+constexpr snd_pcm_stream_t kSndPcmStreamCapture = 1;      // 录音/捕获流
+constexpr snd_pcm_format_t kSndPcmFormatS16Le = 2;        // 16位有符号小端格式
+constexpr snd_pcm_access_t kSndPcmAccessRwInterleaved = 3;// 交织读写模式
+constexpr int kEpipe = 32;                                // 缓冲区越界错误号 (EPIPE / Overrun)
 
+/**
+ * @class AlsaRuntime
+ * @brief 动态加载 ALSA 运行库的包装类，规避直接强链接 libasound
+ */
 class AlsaRuntime {
 public:
+    // ALSA 函数指针类型定义
     using PcmOpen = int (*)(snd_pcm_t**, const char*, snd_pcm_stream_t, int);
     using PcmClose = int (*)(snd_pcm_t*);
     using PcmSetParams = int (*)(snd_pcm_t*,
@@ -45,12 +60,14 @@ public:
     using PcmDrop = int (*)(snd_pcm_t*);
     using StrError = const char* (*)(int);
 
+    // 析构函数，关闭动态库句柄
     ~AlsaRuntime() {
         if (handle_ != nullptr) {
             dlclose(handle_);
         }
     }
 
+    // 动态加载共享库并绑定相关符号接口
     bool load(std::string& error) {
         if (handle_ != nullptr) {
             return true;
@@ -76,6 +93,7 @@ public:
         return true;
     }
 
+    // 导出的 ALSA 接口函数指针成员
     PcmOpen open = nullptr;
     PcmClose close = nullptr;
     PcmSetParams set_params = nullptr;
@@ -86,6 +104,7 @@ public:
     StrError strerror = nullptr;
 
 private:
+    // 模板函数，用于动态提取动态库符号并类型转换
     template <typename Fn>
     bool load_symbol(Fn& fn, const char* name, std::string& error) {
         dlerror();
@@ -99,9 +118,10 @@ private:
         return true;
     }
 
-    void* handle_ = nullptr;
+    void* handle_ = nullptr; // dlopen 获取的动态库句柄
 };
 
+// 辅助读取文本文件
 bool read_file(const std::string& path, std::string& content) {
     std::ifstream input(path);
     if (!input) {
@@ -114,6 +134,7 @@ bool read_file(const std::string& path, std::string& content) {
     return true;
 }
 
+// 解析 "hw:X,Y" 格式的设备名称，提取 card 声卡号与 pcm_device 设备号
 bool parse_hw_device(const std::string& device, int& card, int& pcm_device) {
     static const std::regex pattern(R"(^hw:([0-9]+),([0-9]+)$)");
     std::smatch match;
@@ -126,6 +147,7 @@ bool parse_hw_device(const std::string& device, int& card, int& pcm_device) {
     return true;
 }
 
+// 生成形如 "01-00:" 的 PCM 匹配前缀
 std::string pcm_prefix(int card, int pcm_device) {
     std::ostringstream out;
     if (card < 10) {
@@ -139,6 +161,7 @@ std::string pcm_prefix(int card, int pcm_device) {
     return out.str();
 }
 
+// 从 proc 文本中匹配指定声卡设备的 PCM 条目
 std::string find_pcm_entry(const std::string& pcm_text, int card, int pcm_device) {
     std::istringstream input(pcm_text);
     std::string line;
@@ -151,6 +174,7 @@ std::string find_pcm_entry(const std::string& pcm_text, int card, int pcm_device
     return {};
 }
 
+// 从 proc 文本中寻找指定声卡的真实显示名称
 std::string find_card_name(const std::string& cards_text, int card) {
     std::istringstream input(cards_text);
     std::string line;
@@ -173,21 +197,25 @@ std::string find_card_name(const std::string& cards_text, int card) {
     return {};
 }
 
+// 组合 ALSA 出错信息
 std::string alsa_error(const AlsaRuntime& alsa, const std::string& prefix, int err) {
     return prefix + ": " + alsa.strerror(err);
 }
 
+// 以小端格式读取16位 PCM 样本
 std::int16_t read_s16le(const std::uint8_t* data) {
     return static_cast<std::int16_t>(static_cast<std::uint16_t>(data[0]) |
                                     (static_cast<std::uint16_t>(data[1]) << 8));
 }
 
+// 将16位采样值以小端格式写入缓冲区
 void write_s16le(std::int16_t sample, std::uint8_t* data) {
     const auto value = static_cast<std::uint16_t>(sample);
     data[0] = static_cast<std::uint8_t>(value & 0xFFU);
     data[1] = static_cast<std::uint8_t>((value >> 8) & 0xFFU);
 }
 
+// 进行多通道数据处理，包括降混（如 Stereo 转 Mono）或映射
 std::vector<std::uint8_t> convert_interleaved_s16(const std::uint8_t* input,
                                                   std::size_t frames,
                                                   unsigned int capture_channels,
@@ -200,6 +228,7 @@ std::vector<std::uint8_t> convert_interleaved_s16(const std::uint8_t* input,
     std::vector<std::uint8_t> output(
         frames * output_channels * sizeof(std::int16_t));
     for (std::size_t frame = 0; frame < frames; ++frame) {
+        // 双声道降混单声道算法：将多通道样本求和取均值
         if (output_channels == 1 && capture_channels > 1) {
             std::int32_t sum = 0;
             for (unsigned int channel = 0; channel < capture_channels; ++channel) {
@@ -213,6 +242,7 @@ std::vector<std::uint8_t> convert_interleaved_s16(const std::uint8_t* input,
             continue;
         }
 
+        // 通道扩增或复制逻辑
         for (unsigned int channel = 0; channel < output_channels; ++channel) {
             const unsigned int source_channel =
                 channel < capture_channels ? channel : capture_channels - 1;
@@ -239,6 +269,7 @@ AudioProbeResult AudioCapture::probe() const {
     return probe_device(config_.device);
 }
 
+// 探测声卡设备，检测 /proc/asound 下的节点信息
 AudioProbeResult AudioCapture::probe_device(const std::string& device) {
     AudioProbeResult result;
     result.device = device;
@@ -274,6 +305,7 @@ AudioProbeResult AudioCapture::probe_device(const std::string& device) {
     return result;
 }
 
+// 启动音频采集，创建采集线程并同步等待初始化状态
 bool AudioCapture::start(FrameCallback callback) {
     if (running_) {
         return true;
@@ -288,6 +320,7 @@ bool AudioCapture::start(FrameCallback callback) {
     running_ = true;
     thread_ = std::thread(&AudioCapture::capture_loop, this);
 
+    // 等待后台采集线程中的 ALSA 初始化结果，最长等待 8 秒
     std::unique_lock<std::mutex> lock(state_mutex_);
     const bool signaled = state_cv_.wait_for(lock, std::chrono::seconds(8), [this] {
         return initialization_done_;
@@ -303,6 +336,7 @@ bool AudioCapture::start(FrameCallback callback) {
     return success;
 }
 
+// 停止采集，安全回收线程
 void AudioCapture::stop() {
     running_ = false;
     if (thread_.joinable()) {
@@ -319,6 +353,7 @@ std::string AudioCapture::error() const {
     return error_;
 }
 
+// 辅助更新初始化状态，唤醒等待在 start() 中的主线程
 void AudioCapture::finish_initialization(bool success, const std::string& error) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (initialization_done_) {
@@ -332,9 +367,11 @@ void AudioCapture::finish_initialization(bool success, const std::string& error)
     state_cv_.notify_all();
 }
 
+// 音频采集主线程循环
 void AudioCapture::capture_loop() {
     AlsaRuntime alsa;
     std::string init_error;
+    // 1. 动态加载 libasound
     if (!alsa.load(init_error)) {
         finish_initialization(false, init_error);
         VC_LOG_ERROR("audio-capture", init_error);
@@ -342,6 +379,7 @@ void AudioCapture::capture_loop() {
         return;
     }
 
+    // 2. 打开 PCM 录音设备
     snd_pcm_t* handle = nullptr;
     int ret = alsa.open(&handle, config_.device.c_str(), kSndPcmStreamCapture, 0);
     if (ret < 0) {
@@ -362,6 +400,7 @@ void AudioCapture::capture_loop() {
         period_frames = 960;
     }
 
+    // 3. 配置音频参数：采样格式为 S16_LE，交织读写模式
     ret = alsa.set_params(handle,
                           kSndPcmFormatS16Le,
                           kSndPcmAccessRwInterleaved,
@@ -369,6 +408,7 @@ void AudioCapture::capture_loop() {
                           sample_rate,
                           1,
                           static_cast<unsigned int>(config_.frame_ms * 1000));
+    // 如果请求 mono 被声卡拒绝，尝试以 stereo (双声道) 启动捕获并在软件层进行降混
     if (ret < 0 && output_channels == 1) {
         capture_channels = 2;
         ret = alsa.set_params(handle,
@@ -400,14 +440,20 @@ void AudioCapture::capture_loop() {
                     " capture_channels=" + std::to_string(capture_channels) +
                     " output_channels=" + std::to_string(output_channels));
     finish_initialization(true);
+
+    // 4. 数据轮询抓取
     while (running_) {
+        // 读取交织音频帧
         snd_pcm_sframes_t frames = alsa.readi(handle, buffer.data(), period_frames);
         const std::uint64_t capture_pts_us = MediaClock::now_us();
+        
+        // 缓冲区溢出 (overrun) 异常处理
         if (frames == -kEpipe) {
             VC_LOG_WARN("audio-capture", "ALSA overrun, preparing device");
             alsa.prepare(handle);
             continue;
         }
+        // 底层读取出错恢复
         if (frames < 0) {
             ret = alsa.recover(handle, static_cast<int>(frames), 1);
             if (ret < 0) {
@@ -426,6 +472,7 @@ void AudioCapture::capture_loop() {
             continue;
         }
 
+        // 5. 封装为 AudioFrame 并调用外部回调
         AudioFrame frame;
         frame.pts_us = capture_pts_us;
         frame.sample_rate = config_.sample_rate;
@@ -440,6 +487,7 @@ void AudioCapture::capture_loop() {
         }
     }
 
+    // 6. 停止并关闭 ALSA 设备
     alsa.drop(handle);
     alsa.close(handle);
     running_ = false;

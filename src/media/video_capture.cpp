@@ -1,3 +1,13 @@
+/**
+ * @file video_capture.cpp
+ * @brief VisionCast V4L2 视频采集实现文件
+ * @details 基于 Linux V4L2 (Video for Linux Two) 规范，实现了摄像头的视频帧捕获。
+ *          支持单面 (Single-Plane) 和多面 (Multi-Plane) 缓冲区的查询与映射映射；
+ *          支持自动选择备选摄像头设备及采集格式 (fallback)；
+ *          提供自动曝光优先级抑制功能（防止摄像头因暗光自动降低帧率至 15fps）；
+ *          通过 mmap 映射内核缓冲区，配合线程安全的 poll/ioctl 实现高效、低延迟的数据捕获。
+ */
+
 #include "media/video_capture.h"
 
 #include <fcntl.h>
@@ -62,6 +72,7 @@ std::string errno_text(const std::string& prefix) {
     return out.str();
 }
 
+// V4L2 ioctl 的包装函数，遇到中断信号 EINTR 时自动重试，规避被系统信号打断导致的硬失败。
 bool xioctl(int fd, unsigned long request, void* arg, const std::string& name, std::string& error) {
     for (;;) {
         if (ioctl(fd, request, arg) == 0) {
@@ -75,6 +86,7 @@ bool xioctl(int fd, unsigned long request, void* arg, const std::string& name, s
     }
 }
 
+// 利用 VIDIOC_ENUM_FMT 迭代列举摄像头硬件所支持的所有像素格式（如 NV12, YUYV, MJPEG 等）。
 void enumerate_formats(int fd,
                        v4l2_buf_type type,
                        const std::string& type_name,
@@ -113,6 +125,7 @@ bool is_mplane_type(v4l2_buf_type type) {
     return type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 }
 
+// 针对特定摄像头（如 MIPI 摄像头 subdev 设备），直接通过 VIDIOC_S_CTRL 设置曝光量 (exposure) 和垂直消隐 (vblank) 控制字，锁死传感器帧率。
 void configure_sensor_frame_rate(const VideoConfig& config,
                                  const std::string& active_device) {
     if (config.sensor_subdev.empty() || active_device != config.device) {
@@ -182,6 +195,7 @@ VideoProbeResult VideoCapture::probe() const {
     return probe_device(config_.device);
 }
 
+// 探测摄像头能力和支持格式
 VideoProbeResult VideoCapture::probe_device(const std::string& device) {
     VideoProbeResult result;
     result.device = device;
@@ -197,6 +211,7 @@ VideoProbeResult VideoCapture::probe_device(const std::string& device) {
         return result;
     }
 
+    // 1. 获取设备属性
     v4l2_capability cap{};
     if (ioctl(fd, VIDIOC_QUERYCAP, &cap) != 0) {
         result.error = errno_text("VIDIOC_QUERYCAP " + device);
@@ -211,6 +226,7 @@ VideoProbeResult VideoCapture::probe_device(const std::string& device) {
     result.capabilities = cap.capabilities;
     result.device_caps = cap.device_caps;
 
+    // 2. 枚举支持的流格式
     const std::uint32_t caps = cap.device_caps != 0 ? cap.device_caps : cap.capabilities;
     if ((caps & V4L2_CAP_VIDEO_CAPTURE) != 0) {
         enumerate_formats(fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, "capture", result.formats);
@@ -223,6 +239,7 @@ VideoProbeResult VideoCapture::probe_device(const std::string& device) {
     return result;
 }
 
+// 启动视频采集线程
 bool VideoCapture::start(FrameCallback callback) {
     if (running_) {
         return true;
@@ -238,6 +255,7 @@ bool VideoCapture::start(FrameCallback callback) {
     running_ = true;
     thread_ = std::thread(&VideoCapture::capture_loop, this);
 
+    // 等待后台采集线程中的 V4L2 打开与初始化完成，最长等待 8 秒
     std::unique_lock<std::mutex> lock(state_mutex_);
     const bool signaled = state_cv_.wait_for(lock, std::chrono::seconds(8), [this] {
         return initialization_done_;
@@ -274,6 +292,7 @@ std::string VideoCapture::error() const {
     return error_;
 }
 
+// 辅助更新初始化状态，唤醒等待在 start() 中的主线程
 void VideoCapture::finish_initialization(bool success, const std::string& error) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (initialization_done_) {
@@ -289,7 +308,9 @@ void VideoCapture::finish_initialization(bool success, const std::string& error)
     state_cv_.notify_all();
 }
 
+// 视频采集线程主循环
 void VideoCapture::capture_loop() {
+    // 候选设备列表：主设备及其备选 fallback 设备
     const std::vector<std::pair<std::string, std::string>> candidates = {
         {config_.device, config_.format},
         {config_.fallback_device, config_.fallback_format},
@@ -306,6 +327,7 @@ void VideoCapture::capture_loop() {
             std::lock_guard<std::mutex> lock(state_mutex_);
             active_device_ = device;
         }
+        // 1. 打开视频设备描述符
         int fd = open(device.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
         if (fd < 0) {
             const std::string open_error = errno_text("open " + device);
@@ -326,6 +348,7 @@ void VideoCapture::capture_loop() {
         }
         const std::uint32_t caps = cap.device_caps != 0 ? cap.device_caps : cap.capabilities;
         v4l2_buf_type type;
+        // 支持多面或单面数据读取模式
         if ((caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0) {
             type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
         } else if ((caps & V4L2_CAP_VIDEO_CAPTURE) != 0) {
@@ -348,6 +371,7 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        // 2. 绑定目标采集分辨率及像素格式 (VIDIOC_S_FMT)
         v4l2_format fmt{};
         fmt.type = type;
         if (is_mplane_type(type)) {
@@ -376,6 +400,7 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        // 3. 配置视频流参数，如帧率 (VIDIOC_S_PARM)
         v4l2_streamparm parm{};
         parm.type = type;
         parm.parm.capture.timeperframe.numerator = 1;
@@ -386,6 +411,7 @@ void VideoCapture::capture_loop() {
 
         // Disable auto exposure priority (low-light framerate throttling) if supported,
         // to prevent the webcam driver from lowering the framerate to 15fps.
+        // 4. 禁用自动曝光优先级（暗光降帧率保护），确保在暗光下帧率不降低至 15fps。
         v4l2_control ctrl{};
         ctrl.id = V4L2_CID_EXPOSURE_AUTO_PRIORITY;
         ctrl.value = 0;
@@ -393,6 +419,7 @@ void VideoCapture::capture_loop() {
             VC_LOG_INFO("video-capture", "disabled low-light framerate throttling on " + device);
         }
 
+        // 5. 申请内核 MMAP 缓冲区结构组 (VIDIOC_REQBUFS)
         v4l2_requestbuffers req{};
         req.count = 4;
         req.type = type;
@@ -403,6 +430,7 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        // 6. 遍历并建立 mmap 用户地址空间映射 (VIDIOC_QUERYBUF)
         std::vector<MmapBuffer> buffers(req.count);
         bool map_ok = true;
         for (std::uint32_t i = 0; i < req.count; ++i) {
@@ -445,6 +473,7 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        // 7. 将映射好缓冲区的空闲帧全部入队 (VIDIOC_QBUF)
         for (std::uint32_t i = 0; i < buffers.size(); ++i) {
             v4l2_buffer buf{};
             v4l2_plane planes[VIDEO_MAX_PLANES]{};
@@ -467,6 +496,7 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        // 8. 开启视频流输出，通知主线程初始化就绪 (VIDIOC_STREAMON)
         if (!xioctl(fd, VIDIOC_STREAMON, &type, "VIDIOC_STREAMON " + device, error)) {
             VC_LOG_WARN("video-capture", error);
             unmap_buffers(buffers);
@@ -491,10 +521,13 @@ void VideoCapture::capture_loop() {
             std::lock_guard<std::mutex> lock(state_mutex_);
             error_ = message;
         };
+
+        // 9. 轮询并采集视频数据
         while (running_) {
             pollfd pfd{};
             pfd.fd = fd;
             pfd.events = POLLIN;
+            // 采用 poll 监听设备描述符的可读状态，超时时间为 500 毫秒
             const int poll_ret = poll(&pfd, 1, 500);
             if (poll_ret < 0) {
                 if (errno == EINTR) {
@@ -509,6 +542,7 @@ void VideoCapture::capture_loop() {
                 continue;
             }
 
+            // 图像帧出队列 (VIDIOC_DQBUF)
             v4l2_buffer buf{};
             v4l2_plane planes[VIDEO_MAX_PLANES]{};
             buf.type = type;
@@ -527,6 +561,7 @@ void VideoCapture::capture_loop() {
                 break;
             }
 
+            // 获取时间戳并构造 VideoFrame 传递给订阅回调
             VideoFrame frame;
             frame.pts_us = MediaClock::now_us();
             frame.width = active_width;
@@ -566,6 +601,7 @@ void VideoCapture::capture_loop() {
                 callback_(std::move(frame));
             }
 
+            // 处理完后，将缓冲区重新入队列以备下次循环填充 (VIDIOC_QBUF)
             if (ioctl(fd, VIDIOC_QBUF, &buf) != 0) {
                 const std::string runtime_error = errno_text("VIDIOC_QBUF");
                 set_runtime_error(runtime_error);
@@ -574,6 +610,7 @@ void VideoCapture::capture_loop() {
             }
         }
 
+        // 10. 停止采集并清理设备资源 (VIDIOC_STREAMOFF)
         if (ioctl(fd, VIDIOC_STREAMOFF, &type) != 0) {
             VC_LOG_WARN("video-capture", errno_text("VIDIOC_STREAMOFF"));
         }

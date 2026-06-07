@@ -1,3 +1,13 @@
+/**
+ * @file display_renderer.cpp
+ * @brief VisionCast 显示渲染实现文件
+ * @details 支持多种显示后端，优先级顺序为：
+ *          1. X11 Window (动态加载 libX11 并创建渲染窗口)；
+ *          2. Linux Framebuffer (/dev/fb0)。
+ *          集成了瑞芯微 RGA 硬件加速引擎，用于将 NV12 格式的高速缩放与色彩空间转换（至 RGB/BGR 格式）；
+ *          若 RGA 不可用，则自动退化为 CPU 软件颜色转换和差值缩放。
+ */
+
 #include "media/display_renderer.h"
 
 #include <fcntl.h>
@@ -25,10 +35,12 @@
 namespace visioncast {
 namespace {
 
+// 辅助数值裁剪函数
 std::uint8_t clamp_u8(int value) {
     return static_cast<std::uint8_t>(std::max(0, std::min(255, value)));
 }
 
+// 软件转换算法：将 NV12 (YUV420sp) 的指定像素位置的 Y/U/V 样本还原为标准 RGB888。
 void nv12_to_rgb(const std::uint8_t* y_plane,
                  const std::uint8_t* uv_plane,
                  int stride,
@@ -47,6 +59,7 @@ void nv12_to_rgb(const std::uint8_t* y_plane,
     b = clamp_u8((298 * c + 516 * u + 128) >> 8);
 }
 
+// 软件像素写入逻辑：根据当前 framebuffer 的 bits_per_pixel（16/24/32位），将 RGB 像素以正确的通道偏移和字节序写入目标显存。
 void write_pixel(std::uint8_t* dst,
                  const fb_var_screeninfo& var,
                  std::uint8_t r,
@@ -75,12 +88,17 @@ void write_pixel(std::uint8_t* dst,
     }
 }
 
+/**
+ * @class X11Window
+ * @brief 动态加载 libX11.so 并管理 X11 渲染窗口的辅助类
+ */
 class X11Window {
 public:
     ~X11Window() {
         close();
     }
 
+    // 打开 X11 窗口并根据当前屏幕尺寸和视频分辨率计算最佳等比缩放大小
     bool open_window(const std::string& name, int source_width, int source_height) {
         if (std::getenv("DISPLAY") == nullptr || !load_api()) {
             return false;
@@ -140,6 +158,7 @@ public:
         return display_ != nullptr && window_ != 0 && gc_ != nullptr;
     }
 
+    // 渲染 NV12 格式视频帧
     void render_nv12(const VideoFrame& frame) {
         if (!valid() || frame.format != "NV12" || frame.width <= 0 ||
             frame.height <= 0) {
@@ -185,6 +204,7 @@ public:
 
         bool converted = false;
 #if defined(VISIONCAST_ENABLE_RGA)
+        // 尝试调用瑞芯微 RGA 加速执行色彩转换及缩放
         int destination_format = 0;
         if (image->red_mask == 0x00ff0000UL &&
             image->blue_mask == 0x000000ffUL) {
@@ -214,6 +234,7 @@ public:
                 status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
         }
 #endif
+        // 若 RGA 硬件加速不可用，则退化至 CPU 软件双线性插值缩放与 NV12->RGB 转换
         if (!converted) {
             const auto* y_plane = frame.data.data();
             const auto* uv_plane = frame.data.data() + y_storage;
@@ -243,6 +264,7 @@ public:
             }
         }
 
+        // 推送 XImage 数据刷新 X 窗口
         x_put_image_(display_,
                      window_,
                      gc_,
@@ -265,6 +287,7 @@ private:
         return function != nullptr;
     }
 
+    // 动态 dlopen 绑定 libX11 接口
     bool load_api() {
         library_ = dlopen("libX11.so.6", RTLD_NOW | RTLD_LOCAL);
         if (library_ == nullptr) {
@@ -292,6 +315,7 @@ private:
         return true;
     }
 
+    // 轮询处理 X11 事件（如窗口尺寸改变、窗口关闭等）
     void process_events() {
         while (valid() && x_pending_(display_) > 0) {
             XEvent event{};
@@ -347,12 +371,17 @@ private:
     decltype(&XFlush) x_flush_ = nullptr;
 };
 
+/**
+ * @class Framebuffer
+ * @brief 基于 Linux Framebuffer (/dev/fb0) 的显存直接渲染辅助类
+ */
 class Framebuffer {
 public:
     ~Framebuffer() {
         close();
     }
 
+    // 打开 framebuffer 设备，获取参数并执行 mmap 映射
     bool open_device() {
         fd_ = ::open("/dev/fb0", O_RDWR | O_CLOEXEC);
         if (fd_ < 0) {
@@ -395,6 +424,7 @@ public:
         return memory_ != nullptr;
     }
 
+    // 渲染 NV12 格式视频帧至显存空间
     void render_nv12(const VideoFrame& frame) {
         if (!valid() || frame.format != "NV12" || frame.width <= 0 || frame.height <= 0) {
             return;
@@ -411,6 +441,7 @@ public:
         const int bytes_per_pixel = static_cast<int>(var_.bits_per_pixel / 8U);
 
 #if defined(VISIONCAST_ENABLE_RGA)
+        // 尝试调用瑞芯微 RGA 硬件加速引擎进行图像缩放和颜色空间转换，直接写入显存
         int dest_format = 0;
         if (var_.bits_per_pixel == 32) {
             if (var_.red.offset == 0) {
@@ -455,6 +486,7 @@ public:
         }
 #endif
 
+        // 若硬件加速不可用，则执行 CPU 软件色彩空间转换并按行写入映射的显存
         const auto* y_plane = frame.data.data();
         const auto* uv_plane = frame.data.data() + y_storage;
         const int out_w = static_cast<int>(var_.xres);
@@ -518,6 +550,7 @@ void DisplayRenderer::submit(VideoFrame frame) {
     }
 }
 
+// 渲染线程的主事件循环
 void DisplayRenderer::render_loop() {
     X11Window window;
     Framebuffer framebuffer;
@@ -529,6 +562,7 @@ void DisplayRenderer::render_loop() {
         if (!queue_.pop(frame)) {
             break;
         }
+        // 首帧到来时探测最佳显示后端（优先 X11 窗口，其次 Framebuffer）
         if (!backend_selected) {
             use_window =
                 window.open_window(window_name_, frame.width, frame.height);
@@ -537,6 +571,7 @@ void DisplayRenderer::render_loop() {
             }
             backend_selected = true;
         }
+        // 渲染到对应后端
         if (use_window && window.valid()) {
             window.render_nv12(frame);
         } else if (use_framebuffer) {

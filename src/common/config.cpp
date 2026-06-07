@@ -1,3 +1,12 @@
+/**
+ * @file config.cpp
+ * @brief VisionCast Configuration Management Implementation
+ * 
+ * 本文件实现了 VisionCast 系统配置的管理与解析。为了避免对第三方复杂 JSON 库的依赖，
+ * 此处实现了一个基于文本扫描的轻量级 JSON 解析器。它支持提取嵌套对象、解析字符串字面量、
+ * 整数及布尔值，并将解析到的字段应用到 VisionCastConfig 相应的子结构体中。
+ */
+
 #include "common/config.h"
 
 #include <cctype>
@@ -9,6 +18,14 @@
 namespace visioncast {
 namespace {
 
+/**
+ * @brief 从指定文件路径中读取全部文本内容。
+ * 
+ * @param path 文件的绝对/相对路径。
+ * @param content 输出参数，若读取成功则将文件全部内容存入此变量。
+ * @param error 输出参数，若读取失败，填充错误描述信息。
+ * @return 成功返回 true，失败返回 false。
+ */
 bool read_file(const std::string& path, std::string& content, std::string& error) {
     std::ifstream input(path);
     if (!input) {
@@ -17,33 +34,48 @@ bool read_file(const std::string& path, std::string& content, std::string& error
     }
 
     std::ostringstream buffer;
-    buffer << input.rdbuf();
+    buffer << input.rdbuf(); // 读取整个文件缓冲区
     content = buffer.str();
     return true;
 }
 
+/**
+ * @brief 跳过当前的空白字符（包括空格、制表符、换行等）。
+ * 
+ * @param text 输入文本字符串。
+ * @param pos 当前扫描的位置索引（输入输出参数）。
+ */
 void skip_ws(const std::string& text, std::size_t& pos) {
     while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos])) != 0) {
         ++pos;
     }
 }
 
+/**
+ * @brief 解析 JSON 格式的字符串字面量（包含转义字符处理）。
+ * 
+ * @param text 输入文本字符串。
+ * @param pos 当前扫描位置索引，必须指向开头的双引号 `"`。
+ * @return 解析得到的原始字符串内容。
+ * @throws std::runtime_error 若字面量格式非法或包含未终结的转义序列。
+ */
 std::string parse_string_literal(const std::string& text, std::size_t& pos) {
     if (pos >= text.size() || text[pos] != '"') {
         throw std::runtime_error("expected string literal");
     }
 
-    ++pos;
+    ++pos; // 跳过开头的双引号
     std::string value;
     while (pos < text.size()) {
         char ch = text[pos++];
         if (ch == '"') {
-            return value;
+            return value; // 遇到配对的结束双引号，成功返回
         }
         if (ch != '\\') {
             value.push_back(ch);
             continue;
         }
+        // 处理转义字符
         if (pos >= text.size()) {
             throw std::runtime_error("unterminated escape sequence");
         }
@@ -77,22 +109,32 @@ std::string parse_string_literal(const std::string& text, std::size_t& pos) {
     throw std::runtime_error("unterminated string literal");
 }
 
+/**
+ * @brief 跳过当前的 JSON 值（包括字面量、嵌套的 {} 对象或 [] 数组）。
+ * 
+ * 用于在查找 Key 时跳过不匹配的 Value 块。
+ * 
+ * @param text 输入文本字符串。
+ * @param pos 当前扫描位置索引。
+ */
 void skip_value(const std::string& text, std::size_t& pos) {
     skip_ws(text, pos);
     if (pos >= text.size()) {
         return;
     }
 
+    // 若值是字符串字面量，直接解析并跳过
     if (text[pos] == '"') {
         parse_string_literal(text, pos);
         return;
     }
 
+    // 若值是嵌套对象 {}，通过括号匹配跳过整个对象
     if (text[pos] == '{') {
         int depth = 0;
         while (pos < text.size()) {
             if (text[pos] == '"') {
-                parse_string_literal(text, pos);
+                parse_string_literal(text, pos); // 跳过对象内部的字符串，防止混淆括号
                 continue;
             }
             if (text[pos] == '{') {
@@ -110,11 +152,12 @@ void skip_value(const std::string& text, std::size_t& pos) {
         throw std::runtime_error("unterminated object value");
     }
 
+    // 若值是嵌套数组 []，通过括号匹配跳过整个数组
     if (text[pos] == '[') {
         int depth = 0;
         while (pos < text.size()) {
             if (text[pos] == '"') {
-                parse_string_literal(text, pos);
+                parse_string_literal(text, pos); // 跳过内部字符串
                 continue;
             }
             if (text[pos] == '[') {
@@ -132,11 +175,19 @@ void skip_value(const std::string& text, std::size_t& pos) {
         throw std::runtime_error("unterminated array value");
     }
 
+    // 其他常规标量值（数字、布尔、null），扫描直到逗号或对象结束标志 `}`
     while (pos < text.size() && text[pos] != ',' && text[pos] != '}') {
         ++pos;
     }
 }
 
+/**
+ * @brief 在给定的 JSON 对象字符串中定位指定 Key 对应的 Value 起始位置。
+ * 
+ * @param object JSON 对象的字符串内容（通常包裹在 `{}` 内）。
+ * @param key 需要定位的字段名称。
+ * @return 若找到该 Key，返回对应 Value 字段的第一个非空白字符位置；否则返回 std::nullopt。
+ */
 std::optional<std::size_t> find_key_value_pos(const std::string& object,
                                                const std::string& key) {
     std::size_t pos = 0;
@@ -154,20 +205,27 @@ std::optional<std::size_t> find_key_value_pos(const std::string& object,
         std::string candidate = parse_string_literal(object, pos);
         skip_ws(object, pos);
         if (pos >= object.size() || object[pos] != ':') {
-            pos = key_start + 1;
+            pos = key_start + 1; // 格式不符，回溯扫描下一个位置
             continue;
         }
-        ++pos;
+        ++pos; // 跳过冒号 `:`
         skip_ws(object, pos);
         if (candidate == key) {
-            return pos;
+            return pos; // 匹配成功，返回当前位置
         }
-        skip_value(object, pos);
+        skip_value(object, pos); // 不匹配，跳过当前键对应的值继续搜寻
     }
 
     return std::nullopt;
 }
 
+/**
+ * @brief 在文档中查找嵌套的 JSON 子对象。
+ * 
+ * @param document 父 JSON 文档内容。
+ * @param key 对象的字段名（如 "video", "audio"）。
+ * @return 若找到，以 string 形式返回该子对象 `{ ... }`；否则返回 std::nullopt。
+ */
 std::optional<std::string> find_object(const std::string& document, const std::string& key) {
     auto value_pos = find_key_value_pos(document, key);
     if (!value_pos || *value_pos >= document.size() || document[*value_pos] != '{') {
@@ -180,7 +238,7 @@ std::optional<std::string> find_object(const std::string& document, const std::s
     while (pos < document.size()) {
         char ch = document[pos];
         if (ch == '"') {
-            parse_string_literal(document, pos);
+            parse_string_literal(document, pos); // 跳过字符串以防括号误判
             continue;
         }
         if (ch == '{') {
@@ -188,7 +246,7 @@ std::optional<std::string> find_object(const std::string& document, const std::s
         } else if (ch == '}') {
             --depth;
             if (depth == 0) {
-                return document.substr(start, pos - start + 1);
+                return document.substr(start, pos - start + 1); // 提取完整的对象子串
             }
         }
         ++pos;
@@ -197,6 +255,13 @@ std::optional<std::string> find_object(const std::string& document, const std::s
     throw std::runtime_error("unterminated object for key: " + key);
 }
 
+/**
+ * @brief 从对象中解析指定 Key 的字符串类型值。
+ * 
+ * @param object JSON 对象的字符串内容。
+ * @param key 字段名称。
+ * @return 若找到且为有效字符串，返回解析后的 std::string；否则返回 std::nullopt。
+ */
 std::optional<std::string> string_value(const std::string& object, const std::string& key) {
     auto pos = find_key_value_pos(object, key);
     if (!pos || *pos >= object.size() || object[*pos] != '"') {
@@ -206,6 +271,13 @@ std::optional<std::string> string_value(const std::string& object, const std::st
     return parse_string_literal(object, parse_pos);
 }
 
+/**
+ * @brief 从对象中解析指定 Key 的整型数值。
+ * 
+ * @param object JSON 对象的字符串内容。
+ * @param key 字段名称。
+ * @return 若找到且为有效数字，返回解析后的 int；否则返回 std::nullopt。
+ */
 std::optional<int> int_value(const std::string& object, const std::string& key) {
     auto pos = find_key_value_pos(object, key);
     if (!pos) {
@@ -213,7 +285,7 @@ std::optional<int> int_value(const std::string& object, const std::string& key) 
     }
     std::size_t parse_pos = *pos;
     if (parse_pos < object.size() && object[parse_pos] == '-') {
-        ++parse_pos;
+        ++parse_pos; // 支持负数符号
     }
     if (parse_pos >= object.size() || std::isdigit(static_cast<unsigned char>(object[parse_pos])) == 0) {
         return std::nullopt;
@@ -227,6 +299,15 @@ std::optional<int> int_value(const std::string& object, const std::string& key) 
     return std::stoi(object.substr(*pos, end_pos - *pos));
 }
 
+/**
+ * @brief 从对象中解析指定 Key 的布尔类型值。
+ * 
+ * 匹配 "true" 或 "false"。
+ * 
+ * @param object JSON 对象的字符串内容。
+ * @param key 字段名称。
+ * @return 若找到且为布尔文本，返回对应的布尔值；否则返回 std::nullopt。
+ */
 std::optional<bool> bool_value(const std::string& object, const std::string& key) {
     auto pos = find_key_value_pos(object, key);
     if (!pos) {
@@ -242,6 +323,9 @@ std::optional<bool> bool_value(const std::string& object, const std::string& key
     return std::nullopt;
 }
 
+/**
+ * @brief 将 JSON 对象的字段填充到 VideoConfig 视频配置结构体中。
+ */
 void apply_video_config(const std::string& object, VideoConfig& video) {
     if (auto value = string_value(object, "source")) video.source = *value;
     if (auto value = string_value(object, "fallback_source")) video.fallback_source = *value;
@@ -257,6 +341,9 @@ void apply_video_config(const std::string& object, VideoConfig& video) {
     if (auto value = int_value(object, "sensor_vblank")) video.sensor_vblank = *value;
 }
 
+/**
+ * @brief 将 JSON 对象的字段填充到 AudioConfig 音频配置结构体中。
+ */
 void apply_audio_config(const std::string& object, AudioConfig& audio) {
     if (auto value = string_value(object, "device")) audio.device = *value;
     if (auto value = int_value(object, "sample_rate")) audio.sample_rate = *value;
@@ -265,6 +352,9 @@ void apply_audio_config(const std::string& object, AudioConfig& audio) {
     if (auto value = int_value(object, "frame_ms")) audio.frame_ms = *value;
 }
 
+/**
+ * @brief 将 JSON 对象的字段填充到 EncoderConfig 编码配置结构体中。
+ */
 void apply_encoder_config(const std::string& object, EncoderConfig& encoder) {
     if (auto value = string_value(object, "video_codec")) encoder.video_codec = *value;
     if (auto value = int_value(object, "bitrate")) encoder.bitrate = *value;
@@ -273,6 +363,9 @@ void apply_encoder_config(const std::string& object, EncoderConfig& encoder) {
     if (auto value = int_value(object, "b_frames")) encoder.b_frames = *value;
 }
 
+/**
+ * @brief 将 JSON 对象的字段填充到 StreamConfig 传输流配置结构体中。
+ */
 void apply_stream_config(const std::string& object, StreamConfig& stream) {
     if (auto value = string_value(object, "protocol")) stream.protocol = *value;
     if (auto value = string_value(object, "rtmp_url")) stream.rtmp_url = *value;
@@ -283,11 +376,17 @@ void apply_stream_config(const std::string& object, StreamConfig& stream) {
     if (auto value = string_value(object, "sdp_path")) stream.sdp_path = *value;
 }
 
+/**
+ * @brief 将 JSON 对象的字段填充到 DebugConfig 调试配置结构体中。
+ */
 void apply_debug_config(const std::string& object, DebugConfig& debug) {
     if (auto value = bool_value(object, "enable_perf_log")) debug.enable_perf_log = *value;
     if (auto value = bool_value(object, "enable_dump_frame")) debug.enable_dump_frame = *value;
 }
 
+/**
+ * @brief 格式化输出布尔文本的辅助函数。
+ */
 std::string bool_text(bool value) {
     return value ? "true" : "false";
 }
@@ -306,7 +405,7 @@ void replace_all(std::string& str, const std::string& from, const std::string& t
 }
 
 VisionCastConfig default_config() {
-    return VisionCastConfig{};
+    return VisionCastConfig{}; // 默认初始化值详见 types.h
 }
 
 bool load_config_file(const std::string& path, VisionCastConfig& config, std::string& error) {
@@ -318,6 +417,7 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
     }
 
     try {
+        // 依次解析顶层 key：video, audio, encoder, stream, debug 并填充到配置中
         if (auto object = find_object(document, "video")) apply_video_config(*object, config.video);
         if (auto object = find_object(document, "audio")) apply_audio_config(*object, config.audio);
         if (auto object = find_object(document, "encoder")) apply_encoder_config(*object, config.encoder);

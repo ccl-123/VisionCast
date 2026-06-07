@@ -1,3 +1,15 @@
+/**
+ * @file webrtc_pusher.cpp
+ * @brief VisionCast WebRTC WHIP 推流客户端模块实现文件
+ * 
+ * 本文件利用 libdatachannel C++ API (rtc/rtc.hpp)，实现了 WebRTC WHIP 推流客户端。
+ * 流程包含：
+ * 1. 本地网络 IP 绑定以进行 ICE 通信。
+ * 2. 构造本地 SDP Offer，添加 H.264 视频轨道和 PCMA 音频轨道。
+ * 3. 使用原生 Sockets 实现 HTTP POST 交换 SDP Offer/Answer，与 WHIP 服务端协商。
+ * 4. 建立 DTLS 握手与 SRTP 加密信道，实现超低延迟的音视频传输。
+ */
+
 #include "transport/webrtc_pusher.h"
 
 #include <algorithm>
@@ -37,6 +49,7 @@ struct ParsedHttpUrl {
 };
 
 #if defined(VISIONCAST_ENABLE_WEBRTC)
+// 解析目标 Host 的本地网卡绑定 IP 地址，以确定 WebRTC 通信时绑定的本地网络接口
 bool get_resolved_local_ip(const std::string& host, std::string& local_ip) {
     if (host == "localhost") {
         local_ip = "127.0.0.1";
@@ -158,6 +171,7 @@ bool parse_http_response(const std::string& response, int& status, std::string& 
     return true;
 }
 
+// 通过 HTTP POST 请求，将本地生成的 SDP Offer 发送到 WHIP 接收端，并获取 SDP Answer 响应
 bool http_post_sdp(const std::string& url,
                    const std::string& offer_sdp,
                    std::string& answer_sdp,
@@ -308,6 +322,8 @@ bool WebRtcPusher::connect(std::string& error) {
         // 在纯局域网环境下，不需要外网 STUN 服务器，避免因 DNS 解析超时导致启动挂起
         // config.iceServers.emplace_back("stun:stun.l.google.com:19302");
         impl_->pc = std::make_shared<rtc::PeerConnection>(config);
+        // 设置 PeerConnection 状态变化的监听器。
+        // 当状态转为 Connected 时代表握手成功；如果转为 Failed 或 Closed 则视为失败。
         impl_->pc->onStateChange([this](rtc::PeerConnection::State state) {
             std::lock_guard<std::mutex> lock(impl_->mutex);
             if (state == rtc::PeerConnection::State::Connected) {
@@ -319,6 +335,8 @@ bool WebRtcPusher::connect(std::string& error) {
             }
             impl_->cv.notify_all();
         });
+        
+        // 监听 ICE Candidate 收集状态变化，收集完成后读取并保存本地 SDP Offer
         impl_->pc->onGatheringStateChange([this](rtc::PeerConnection::GatheringState state) {
             if (state != rtc::PeerConnection::GatheringState::Complete) {
                 return;
@@ -360,7 +378,7 @@ bool WebRtcPusher::connect(std::string& error) {
             }
         }
 
-        // Force the client to be the DTLS active role (client) to initiate handshake
+        // 强制将客户端设置为 DTLS active 角色（主动发送 Client Hello），以防与某些 SFU/网关握手冲突
         std::string modified_offer = impl_->local_sdp;
         size_t pos = 0;
         while ((pos = modified_offer.find("a=setup:actpass", pos)) != std::string::npos) {
