@@ -135,11 +135,44 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 
 ## 10. 线程模型设计
 
-系统运行于多线程异步调度模型中：
-- **采集线程** (`VideoCaptureThread` / `AudioCaptureThread`)：专职设备数据读取。
-- **主管线线程** (`VideoPipeline` / `AudioPipeline`)：处理解码、RGA 转换、MPP/音频编码和多协议推送。
-- **本地渲染线程** (`DisplayRenderer` 线程)：OpenCV 窗口图像异步渲染。
-- **丢帧防堆积策略**：在原始和编码队列中采用最大长度为 2 的 `BlockingQueue`。当网络或发送异常引起阻塞时，队列满后自动丢弃头部最老的帧，将最新帧推入尾部，防止延迟累积。
+VisionCast 系统采用高度解耦、异步非阻塞的“生产者-消费者”多线程管线模型。各模块间通过线程安全且带丢帧限缓机制的阻塞队列（`BlockingQueue`）连接。
+
+### 10.1 核心工作线程及数量分配
+在正常推流运行期间（如 WebRTC 模式），系统至少会有 **6 个主控 C++ 线程** 处于活跃运行状态，另有底层第三方库额外拉起的 **3 ~ 5 个系统级网络 IO 线程**，合并运行共约 **9 ~ 11 个线程**：
+
+1. **主控制线程 (Main Thread)**
+   - **执行路径**：`src/main.cpp` 的 `main()`。
+   - **职责**：执行配置载入、信号注册（SIGINT/SIGTERM）与子流水线拉起。启动后主线程每 200ms 挂起轮询，监测各个子流水线的健康状况，并在用户请求退出时执行优雅的安全清理机制。
+2. **视频采集线程 (Video Capture Thread)**
+   - **执行路径**：`src/media/video_capture.cpp` 中的 [VideoCapture::capture_loop](file:///home/elf/open_project/VisionCast/src/media/video_capture.cpp)。
+   - **职责**：专职通过 V4L2 Mplane API 从物理摄像头节点 `/dev/video11` 阻塞捞取视频帧，写入视频管线原始帧队列 `raw_queue_` 中。
+3. **视频处理与编码线程 (Video Pipeline Thread)**
+   - **执行路径**：`src/pipeline/video_pipeline.cpp` 中的 [VideoPipeline::worker_loop](file:///home/elf/open_project/VisionCast/src/pipeline/video_pipeline.cpp)。
+   - **职责**：作为消费者从 `raw_queue_` 中提取 NV12 原图。然后调度硬件：
+     - 调用 **RGA** 硬件执行缩放与色彩校准；
+     - 送入 **MPP** 进行 H.264 视频硬件编码；
+     - 若本地开启了预览，将原始 NV12 图像推入渲染队列中；
+     - 最终将编码码流发送至 `AvTransport` 进行网络封包发送。
+4. **本地渲染预览线程 (Display Renderer Thread)**
+   - **执行路径**：`src/media/display_renderer.cpp` 中的 [DisplayRenderer::render_loop](file:///home/elf/open_project/VisionCast/src/media/display_renderer.cpp)。
+   - **职责**：从预览队列中获取 NV12 图像，通过 OpenCV (支持图形桌面的 X11 窗口 或无图形桌面的 `/dev/fb0` Framebuffer) 异步将图像渲染到显示器，避免本地图形绘制拖累网络发送主干道。
+5. **音频采集线程 (Audio Capture Thread)**
+   - **执行路径**：`src/media/audio_capture.cpp` 中的 [AudioCapture::capture_loop](file:///home/elf/open_project/VisionCast/src/media/audio_capture.cpp)。
+   - **职责**：专职通过 ALSA API 定期从音频输入端 `hw:1,0` 抓取 20ms 周期的原始双声道 PCM 数据，推入音频管线原始帧队列 `raw_queue_` 中。
+6. **音频处理与编码线程 (Audio Pipeline Thread)**
+   - **执行路径**：`src/pipeline/audio_pipeline.cpp` 中的 [AudioPipeline::worker_loop](file:///home/elf/open_project/VisionCast/src/pipeline/audio_pipeline.cpp)。
+   - **职责**：从音频队列中消费 PCM 数据，在底层进行双声道混音（求均值），调用 `AudioEncoder` 进行编码（PCMA/AAC），最后将编码数据送入 `AvTransport` 进行发送。
+7. **第三方协议栈后台网络线程 (Third-Party Network Threads)**
+   - 在 WebRTC 传输模式下，`libdatachannel` 和 `libjuice` 会在后台启动 **3 ~ 5 个** 系统线程，来独立进行：
+     - **ICE 连接状态与 STUN 打洞包轮询**；
+     - **DTLS/SRTP 加密和数据解包**；
+     - **SCTP 网络 IO 控制及重传**。
+
+### 10.2 丢帧与防延迟累积策略
+为了防止由于网络拥堵、临时发送失败或处理速度下降引发音视频帧的堆积积压：
+- 视频和音频流水线中的每个 `BlockingQueue` 均设定了最大缓冲长度限制为 **`2`**。
+- 一旦队列填满，后入的待处理帧或编码完成帧将**自动丢弃队列头部最老的帧（Head Dropping）**，然后把最新帧推入队列尾部。
+- 这样能物理切断延迟累积效应，确保即便在网络出现剧烈波动甚至网络短暂恢复时，客户端解码渲染的依然是无延迟的最新数据流。
 
 ---
 
