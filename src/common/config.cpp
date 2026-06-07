@@ -277,8 +277,6 @@ void apply_stream_config(const std::string& object, StreamConfig& stream) {
     if (auto value = string_value(object, "server_ip")) stream.server_ip = *value;
     if (auto value = int_value(object, "video_port")) stream.video_port = *value;
     if (auto value = int_value(object, "audio_port")) stream.audio_port = *value;
-    if (auto value = int_value(object, "rtsp_port")) stream.rtsp_port = *value;
-    if (auto value = string_value(object, "rtsp_path")) stream.rtsp_path = *value;
     if (auto value = string_value(object, "sdp_path")) stream.sdp_path = *value;
 }
 
@@ -344,8 +342,6 @@ std::string summarize_config(const VisionCastConfig& config) {
         << ", server_ip=" << config.stream.server_ip
         << ", video_port=" << config.stream.video_port
         << ", audio_port=" << config.stream.audio_port
-        << ", rtsp_port=" << config.stream.rtsp_port
-        << ", rtsp_path=" << config.stream.rtsp_path
         << ", sdp_path=" << config.stream.sdp_path << '\n';
     out << "Debug: perf_log=" << bool_text(config.debug.enable_perf_log)
         << ", dump_frame=" << bool_text(config.debug.enable_dump_frame);

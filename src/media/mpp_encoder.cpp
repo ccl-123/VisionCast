@@ -10,6 +10,7 @@
 #if defined(VISIONCAST_ENABLE_MPP)
 #include "mpp_buffer.h"
 #include "mpp_frame.h"
+#include "mpp_meta.h"
 #include "mpp_packet.h"
 #include "rk_mpi.h"
 #include "rk_type.h"
@@ -218,6 +219,8 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         error = mpp_error("mpp_buffer_get", buffer_ret);
         return false;
     }
+    MppBuffer packet_buffer = nullptr;
+    MppPacket output_packet = nullptr;
 
     std::memcpy(mpp_buffer_get_ptr(buffer), frame.data.data(), frame.data.size());
     mpp_buffer_sync_end(buffer);
@@ -239,17 +242,52 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
     mpp_frame_set_pts(mpp_frame, static_cast<RK_S64>(frame.pts_us));
     mpp_frame_set_buffer(mpp_frame, buffer);
 
-    MppPacket out = nullptr;
-    ret = impl_->mpi->encode(impl_->ctx, mpp_frame, &out);
+    const std::size_t packet_capacity =
+        std::max<std::size_t>(frame.data.size(), static_cast<std::size_t>(encoder_.bitrate / 8));
+    ret = mpp_buffer_get(impl_->group, &packet_buffer, packet_capacity);
+    if (ret != MPP_OK) {
+        mpp_frame_deinit(&mpp_frame);
+        mpp_buffer_put(buffer);
+        error = mpp_error("mpp_buffer_get(packet)", ret);
+        return false;
+    }
+    ret = mpp_packet_init_with_buffer(&output_packet, packet_buffer);
+    if (ret != MPP_OK) {
+        mpp_frame_deinit(&mpp_frame);
+        mpp_buffer_put(buffer);
+        mpp_buffer_put(packet_buffer);
+        error = mpp_error("mpp_packet_init_with_buffer", ret);
+        return false;
+    }
+    mpp_packet_set_length(output_packet, 0);
+    mpp_meta_set_packet(mpp_frame_get_meta(mpp_frame), KEY_OUTPUT_PACKET, output_packet);
+
+    ret = impl_->mpi->encode_put_frame(impl_->ctx, mpp_frame);
     mpp_frame_deinit(&mpp_frame);
     mpp_buffer_put(buffer);
     if (ret != MPP_OK) {
-        error = mpp_error("mpi->encode", ret);
+        mpp_packet_deinit(&output_packet);
+        mpp_buffer_put(packet_buffer);
+        error = mpp_error("mpi->encode_put_frame", ret);
+        return false;
+    }
+
+    MppPacket out = nullptr;
+    ret = impl_->mpi->encode_get_packet(impl_->ctx, &out);
+    if (ret != MPP_OK) {
+        mpp_packet_deinit(&output_packet);
+        mpp_buffer_put(packet_buffer);
+        error = mpp_error("mpi->encode_get_packet", ret);
         return false;
     }
     if (out == nullptr) {
-        error = "MPP returned no packet";
-        return false;
+        mpp_packet_deinit(&output_packet);
+        mpp_buffer_put(packet_buffer);
+        packet = {};
+        packet.media_type = MediaType::Video;
+        packet.pts_us = frame.pts_us;
+        packet.rtp_timestamp = MediaClock::video_rtp_timestamp(frame.pts_us);
+        return true;
     }
 
     const auto* pos = static_cast<const std::uint8_t*>(mpp_packet_get_pos(out));
@@ -257,10 +295,24 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
     packet = {};
     packet.media_type = MediaType::Video;
     packet.pts_us = frame.pts_us;
-    packet.key_frame = contains_h264_nalu_type(pos, length, 5);
     packet.rtp_timestamp = MediaClock::video_rtp_timestamp(frame.pts_us);
+    if (pos == nullptr || length == 0) {
+        const bool same_packet = out == output_packet;
+        mpp_packet_deinit(&out);
+        if (!same_packet) {
+            mpp_packet_deinit(&output_packet);
+        }
+        mpp_buffer_put(packet_buffer);
+        return true;
+    }
+    packet.key_frame = contains_h264_nalu_type(pos, length, 5);
     packet.data.assign(pos, pos + length);
+    const bool same_packet = out == output_packet;
     mpp_packet_deinit(&out);
+    if (!same_packet) {
+        mpp_packet_deinit(&output_packet);
+    }
+    mpp_buffer_put(packet_buffer);
     return true;
 #else
     (void)frame;

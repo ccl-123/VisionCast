@@ -35,14 +35,12 @@ struct EncoderConfig {
 };
 
 struct StreamConfig {
-    std::string protocol = "udp";
+    std::string protocol = "rtp";
     std::string rtmp_url = "rtmp://192.168.137.1:1935/live/stream";
     std::string webrtc_url = "http://192.168.137.1:8889/live/stream";
     std::string server_ip = "192.168.137.1";
     int video_port = 5004;
     int audio_port = 5006;
-    int rtsp_port = 8554;
-    std::string rtsp_path = "/live";
     std::string sdp_path = "test.sdp";
 };
 

@@ -18,8 +18,6 @@ set(RGA_LIB "${THIRDPARTY_DIR}/rga/lib/Linux/aarch64/librga.so")
 set(MPP_INC_DIR "${THIRDPARTY_DIR}/mpp/include/rockchip")
 set(MPP_LIB_DIR "${THIRDPARTY_DIR}/mpp/Linux/aarch64")
 set(MPP_LIB "${MPP_LIB_DIR}/librockchip_mpp.so")
-set(RTSP_INC_DIR "${THIRDPARTY_DIR}/rtsp/include")
-set(RTSP_LIB "${THIRDPARTY_DIR}/rtsp/lib/aarch64/librtsp.a")
 set(FFMPEG_INC_DIR "${THIRDPARTY_DIR}/ffmpeg/include")
 set(FFMPEG_LIB_DIR "${THIRDPARTY_DIR}/ffmpeg/lib/aarch64")
 set(AVFORMAT_LIB "${FFMPEG_LIB_DIR}/libavformat.so")
@@ -62,7 +60,6 @@ add_executable(visioncast
     src/transport/av_transport.cpp
     src/transport/udp_sender.cpp
     src/transport/rtmp_pusher.cpp
-    src/transport/rtsp_server.cpp
     src/transport/webrtc_pusher.cpp
 )
 
@@ -96,13 +93,7 @@ else()
     message(WARNING "Rockchip MPP headers/library were not found; video encoding will be disabled")
 endif()
 
-if (VISIONCAST_TARGET_RK3588 AND EXISTS "${RTSP_INC_DIR}/rtsp_demo.h" AND EXISTS "${RTSP_LIB}")
-    target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_RTSP=1)
-    target_include_directories(visioncast SYSTEM PRIVATE ${RTSP_INC_DIR})
-    target_link_libraries(visioncast PRIVATE ${RTSP_LIB})
-else()
-    message(WARNING "Rockchip RTSP helper was not found; RTSP server mode will be disabled")
-endif()
+
 
 if (VISIONCAST_TARGET_RK3588
     AND EXISTS "${FFMPEG_INC_DIR}/libavformat/avformat.h"

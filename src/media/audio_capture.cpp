@@ -1,11 +1,14 @@
 #include "media/audio_capture.h"
 
+#include <cstdint>
 #include <fstream>
 #include <chrono>
 #include <dlfcn.h>
 #include <regex>
 #include <sstream>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "common/log.h"
 #include "media/media_clock.h"
@@ -174,6 +177,55 @@ std::string alsa_error(const AlsaRuntime& alsa, const std::string& prefix, int e
     return prefix + ": " + alsa.strerror(err);
 }
 
+std::int16_t read_s16le(const std::uint8_t* data) {
+    return static_cast<std::int16_t>(static_cast<std::uint16_t>(data[0]) |
+                                    (static_cast<std::uint16_t>(data[1]) << 8));
+}
+
+void write_s16le(std::int16_t sample, std::uint8_t* data) {
+    const auto value = static_cast<std::uint16_t>(sample);
+    data[0] = static_cast<std::uint8_t>(value & 0xFFU);
+    data[1] = static_cast<std::uint8_t>((value >> 8) & 0xFFU);
+}
+
+std::vector<std::uint8_t> convert_interleaved_s16(const std::uint8_t* input,
+                                                  std::size_t frames,
+                                                  unsigned int capture_channels,
+                                                  unsigned int output_channels) {
+    if (capture_channels == output_channels) {
+        return std::vector<std::uint8_t>(
+            input, input + frames * capture_channels * sizeof(std::int16_t));
+    }
+
+    std::vector<std::uint8_t> output(
+        frames * output_channels * sizeof(std::int16_t));
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        if (output_channels == 1 && capture_channels > 1) {
+            std::int32_t sum = 0;
+            for (unsigned int channel = 0; channel < capture_channels; ++channel) {
+                const std::size_t offset =
+                    (frame * capture_channels + channel) * sizeof(std::int16_t);
+                sum += read_s16le(input + offset);
+            }
+            const auto mixed =
+                static_cast<std::int16_t>(sum / static_cast<std::int32_t>(capture_channels));
+            write_s16le(mixed, output.data() + frame * sizeof(std::int16_t));
+            continue;
+        }
+
+        for (unsigned int channel = 0; channel < output_channels; ++channel) {
+            const unsigned int source_channel =
+                channel < capture_channels ? channel : capture_channels - 1;
+            const std::size_t input_offset =
+                (frame * capture_channels + source_channel) * sizeof(std::int16_t);
+            const std::size_t output_offset =
+                (frame * output_channels + channel) * sizeof(std::int16_t);
+            write_s16le(read_s16le(input + input_offset), output.data() + output_offset);
+        }
+    }
+    return output;
+}
+
 }  // namespace
 
 AudioCapture::AudioCapture(AudioConfig config)
@@ -301,7 +353,9 @@ void AudioCapture::capture_loop() {
     }
 
     const unsigned int sample_rate = static_cast<unsigned int>(config_.sample_rate);
-    const unsigned int channels = static_cast<unsigned int>(config_.channels);
+    const unsigned int output_channels =
+        static_cast<unsigned int>(config_.channels > 0 ? config_.channels : 1);
+    unsigned int capture_channels = output_channels;
     snd_pcm_uframes_t period_frames =
         static_cast<snd_pcm_uframes_t>((sample_rate * static_cast<unsigned int>(config_.frame_ms)) / 1000U);
     if (period_frames == 0) {
@@ -311,10 +365,24 @@ void AudioCapture::capture_loop() {
     ret = alsa.set_params(handle,
                           kSndPcmFormatS16Le,
                           kSndPcmAccessRwInterleaved,
-                          channels,
+                          capture_channels,
                           sample_rate,
                           1,
                           static_cast<unsigned int>(config_.frame_ms * 1000));
+    if (ret < 0 && output_channels == 1) {
+        capture_channels = 2;
+        ret = alsa.set_params(handle,
+                              kSndPcmFormatS16Le,
+                              kSndPcmAccessRwInterleaved,
+                              capture_channels,
+                              sample_rate,
+                              1,
+                              static_cast<unsigned int>(config_.frame_ms * 1000));
+        if (ret >= 0) {
+            VC_LOG_WARN("audio-capture",
+                        "ALSA device rejected mono capture; capturing stereo and downmixing to mono");
+        }
+    }
     if (ret < 0) {
         init_error = alsa_error(alsa, "snd_pcm_set_params", ret);
         finish_initialization(false, init_error);
@@ -324,10 +392,13 @@ void AudioCapture::capture_loop() {
         return;
     }
 
-    const std::size_t bytes_per_frame = static_cast<std::size_t>(channels) * sizeof(std::int16_t);
+    const std::size_t bytes_per_frame = static_cast<std::size_t>(capture_channels) * sizeof(std::int16_t);
     std::vector<std::uint8_t> buffer(static_cast<std::size_t>(period_frames) * bytes_per_frame);
     std::uint64_t sequence = 0;
-    VC_LOG_INFO("audio-capture", "capturing from " + config_.device);
+    VC_LOG_INFO("audio-capture",
+                "capturing from " + config_.device +
+                    " capture_channels=" + std::to_string(capture_channels) +
+                    " output_channels=" + std::to_string(output_channels));
     finish_initialization(true);
     while (running_) {
         snd_pcm_sframes_t frames = alsa.readi(handle, buffer.data(), period_frames);
@@ -358,10 +429,12 @@ void AudioCapture::capture_loop() {
         AudioFrame frame;
         frame.pts_us = capture_pts_us;
         frame.sample_rate = config_.sample_rate;
-        frame.channels = config_.channels;
+        frame.channels = static_cast<int>(output_channels);
         frame.sequence = sequence++;
-        const std::size_t bytes = static_cast<std::size_t>(frames) * bytes_per_frame;
-        frame.pcm.assign(buffer.begin(), buffer.begin() + bytes);
+        frame.pcm = convert_interleaved_s16(buffer.data(),
+                                            static_cast<std::size_t>(frames),
+                                            capture_channels,
+                                            output_channels);
         if (callback_) {
             callback_(std::move(frame));
         }

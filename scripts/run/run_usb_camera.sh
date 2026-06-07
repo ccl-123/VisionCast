@@ -35,12 +35,6 @@ fi
 if [[ -n "${AUDIO_PORT:-}" ]]; then
     ARGS+=(--audio-port "${AUDIO_PORT}")
 fi
-if [[ -n "${RTSP_PORT:-}" ]]; then
-    ARGS+=(--rtsp-port "${RTSP_PORT}")
-fi
-if [[ -n "${RTSP_PATH:-}" ]]; then
-    ARGS+=(--rtsp-path "${RTSP_PATH}")
-fi
 if [[ -n "${SDP_PATH:-}" ]]; then
     ARGS+=(--sdp-path "${SDP_PATH}")
 fi

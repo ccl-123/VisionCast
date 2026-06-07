@@ -10,7 +10,6 @@
 #include "media/encoded_packet.h"
 #include "transport/rtmp_pusher.h"
 #include "transport/rtp_packetizer.h"
-#include "transport/rtsp_server.h"
 #include "transport/udp_sender.h"
 #include "transport/webrtc_pusher.h"
 
@@ -37,7 +36,6 @@ private:
     RtpPacketizer audio_rtp_;
     AudioEncoder audio_encoder_;
     RtmpPusher rtmp_;
-    RtspServer rtsp_;
     WebRtcPusher webrtc_;
     std::mutex mutex_;
     bool opened_ = false;

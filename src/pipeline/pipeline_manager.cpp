@@ -159,8 +159,7 @@ bool PipelineManager::write_sdp_file(std::string& error) const {
 }
 
 int PipelineManager::run_stream() {
-    if (config_.stream.protocol != "udp" &&
-        config_.stream.protocol != "rtsp" &&
+    if (config_.stream.protocol != "rtp" &&
         config_.stream.protocol != "rtmp" &&
         config_.stream.protocol != "webrtc") {
         VC_LOG_ERROR("pipeline", "unsupported stream protocol=" + config_.stream.protocol);
@@ -168,7 +167,7 @@ int PipelineManager::run_stream() {
     }
 
     std::string error;
-    if (config_.stream.protocol == "udp") {
+    if (config_.stream.protocol == "rtp") {
         if (!write_sdp_file(error)) {
             VC_LOG_ERROR("pipeline", error);
             return 1;
@@ -179,11 +178,6 @@ int PipelineManager::run_stream() {
                         std::to_string(config_.stream.video_port) + " audio=" +
                         config_.stream.server_ip + ":" +
                         std::to_string(config_.stream.audio_port));
-    } else if (config_.stream.protocol == "rtsp") {
-        VC_LOG_INFO("pipeline",
-                    "RTSP server listening on port " +
-                        std::to_string(config_.stream.rtsp_port) +
-                        " path=" + config_.stream.rtsp_path);
     } else if (config_.stream.protocol == "rtmp") {
         VC_LOG_INFO("pipeline", "RTMP push target=" + config_.stream.rtmp_url);
     } else {

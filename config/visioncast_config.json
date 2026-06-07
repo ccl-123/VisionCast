@@ -1,6 +1,6 @@
 {
-  "//comment_1": "默认使用 RTP over UDP 主动推流；protocol 也可配置为 rtsp、rtmp 或 webrtc。",
-  "//comment_2": "RTSP 使用 rtsp_port/rtsp_path，RTMP 使用 rtmp_url，WebRTC 使用 webrtc_url，UDP 使用 server_ip/video_port/audio_port。",
+  "//comment_1": "默认使用 RTP over UDP 主动推流；protocol 也可配置为 rtmp 或 webrtc。",
+  "//comment_2": "RTMP 使用 rtmp_url，WebRTC 使用 webrtc_url，RTP 使用 server_ip/video_port/audio_port。",
   "video": {
     "source": "mipi_13855",
     "fallback_source": "usb_c270",
@@ -27,14 +27,12 @@
     "b_frames": 0
   },
   "stream": {
-    "protocol": "udp",
+    "protocol": "rtp",
     "rtmp_url": "rtmp://192.168.137.1:1935/live/stream",
     "webrtc_url": "http://192.168.137.1:8889/live/stream",
     "server_ip": "192.168.137.1",
     "video_port": 5004,
     "audio_port": 5006,
-    "rtsp_port": 8554,
-    "rtsp_path": "/live",
     "sdp_path": "test.sdp"
   },
   "debug": {

@@ -11,7 +11,6 @@ AvTransport::AvTransport(VisionCastConfig config)
       video_rtp_(96, 0x56435631U),
       audio_rtp_(8, 0x56434131U),
       rtmp_(config_.stream.rtmp_url, config_.video, config_.audio),
-      rtsp_(config_.stream.rtsp_port, config_.stream.rtsp_path),
       webrtc_(config_.stream.webrtc_url, config_.video, config_.audio) {}
 
 AvTransport::~AvTransport() {
@@ -23,14 +22,10 @@ bool AvTransport::open(std::string& error) {
     if (opened_) {
         return true;
     }
-    if (config_.stream.protocol == "udp") {
+    if (config_.stream.protocol == "rtp") {
         if (!video_udp_.open(error) || !audio_udp_.open(error)) {
             video_udp_.close();
             audio_udp_.close();
-            return false;
-        }
-    } else if (config_.stream.protocol == "rtsp") {
-        if (!rtsp_.open(error)) {
             return false;
         }
     } else if (config_.stream.protocol == "rtmp") {
@@ -53,7 +48,6 @@ void AvTransport::close() {
     std::lock_guard<std::mutex> lock(mutex_);
     video_udp_.close();
     audio_udp_.close();
-    rtsp_.close();
     rtmp_.disconnect();
     webrtc_.disconnect();
     opened_ = false;
@@ -65,16 +59,13 @@ bool AvTransport::send_video(const EncodedPacket& packet, std::string& error) {
         error = "transport is not open";
         return false;
     }
-    if (config_.stream.protocol == "udp") {
+    if (config_.stream.protocol == "rtp") {
         for (const auto& rtp : video_rtp_.packetize(packet)) {
             if (!video_udp_.send(rtp.bytes.data(), rtp.bytes.size(), error)) {
                 return false;
             }
         }
         return true;
-    }
-    if (config_.stream.protocol == "rtsp") {
-        return rtsp_.push_video(packet.data.data(), packet.data.size(), packet.pts_us, error);
     }
     if (config_.stream.protocol == "webrtc") {
         return webrtc_.push_video_rtp(video_rtp_.packetize(packet), error);
@@ -94,17 +85,13 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
     }
 
     const EncodedPacket encoded = audio_encoder_.encode_pcma(frame);
-    if (config_.stream.protocol == "udp") {
+    if (config_.stream.protocol == "rtp") {
         for (const auto& rtp : audio_rtp_.packetize(encoded)) {
             if (!audio_udp_.send(rtp.bytes.data(), rtp.bytes.size(), error)) {
                 return false;
             }
         }
         return true;
-    }
-    if (config_.stream.protocol == "rtsp") {
-        return rtsp_.push_audio(
-            encoded.data.data(), encoded.data.size(), encoded.pts_us, error);
     }
     if (config_.stream.protocol == "webrtc") {
         return webrtc_.push_audio_rtp(audio_rtp_.packetize(encoded), error);

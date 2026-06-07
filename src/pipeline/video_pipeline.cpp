@@ -110,6 +110,9 @@ void VideoPipeline::worker_loop() {
         }
         const std::uint64_t t_encode_end = monotonic_now_us();
         renderer_.submit(std::move(nv12));
+        if (encoded.data.empty()) {
+            continue;
+        }
 
         if (!transport_->send_video(encoded, error)) {
             VC_LOG_ERROR("network", error);
