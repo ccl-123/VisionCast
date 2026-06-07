@@ -18,10 +18,6 @@
   ```bash
   ./install/visioncast/scripts/run/run_usb_camera.sh rtmp
   ```
-- **RTSP 协议推流**：
-  ```bash
-  ./install/visioncast/scripts/run/run_usb_camera.sh rtsp
-  ```
 - **RTP over UDP 推流**：
   ```bash
   ./install/visioncast/scripts/run/run_usb_camera.sh rtp
@@ -147,7 +143,7 @@ sar -n DEV 1
 
 ### 5.4 查看流媒体端口占用情况
 ```bash
-ss -tulnp | grep -E "1936|8891|8555"
+ss -tulnp | grep -E "1936|8891"
 ```
 
 ---
@@ -158,5 +154,4 @@ ss -tulnp | grep -E "1936|8891|8555"
 2. **多协议拉流端接入**：
    - WebRTC WHIP 拉流：浏览器直接访问 `http://BOARD_IP:8891/live/stream`。
    - RTMP 拉流：`ffplay rtmp://BOARD_IP:1936/live/stream`。
-   - RTSP 拉流：`ffplay rtsp://BOARD_IP:8555/live`。
    - RTP over UDP 拉流：将板端生成的 `test.sdp` 拷贝至 PC 并运行 `ffplay -protocol_whitelist file,rtp,udp test.sdp`。

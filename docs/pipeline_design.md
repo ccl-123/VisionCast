@@ -4,7 +4,7 @@
 > 平台：ELF-RK3588
 > 视频输入：13855 MIPI 摄像头 (主路径 `/dev/video11`) / USB C270 (备用路径 `/dev/video21`)
 > 音频输入：NAU8822 `hw:1,0`
-> 传输协议：WebRTC WHIP、RTMP、RTSP、RTP over UDP (均已实现)
+> 传输协议：WebRTC WHIP、RTMP、RTP over UDP (均已实现)
 
 ---
 
@@ -30,7 +30,6 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
                                           │
                                           ├─> [WebRtcPusher] (WebRTC WHIP)
                                           ├─> [RtmpPusher] (FFmpeg RTMP)
-                                          ├─> [RtspServer] (内嵌式 RTSP 服务)
                                           └─> [UdpSender] (RTP over UDP 裸流)
 
 [AudioCapture] (NAU8822 hw:1,0) ────> [AudioEncoder] (G.711 PCMA / AAC)
@@ -108,12 +107,9 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 ### 9.2 RTMP
 - **实现**：采用 FFmpeg 动态加载库方式，将 H.264 NAL 字节流封装为 AVCC 长度前缀格式，推送至目的流媒体服务器端口。
 
-### 9.3 RTSP
-- **实现**：内嵌静态 `librtsp.a` 服务端。在板端本地 `8555` 端口监听，接收播放端连接并分发音视频数据，不依赖外部转发服务器。
-
-### 9.4 RTP over UDP
+### 9.3 RTP over UDP
 - **实现**：音视频 RTP 包直接通过裸 UDP 向目标接收端口投递，并在运行时自动在工作目录生成对应的播放描述文件 `test.sdp`。
-- **空挂断容错**：在 `UdpSender::send` 中对套接字 `ECONNREFUSED` 异常进行拦截 and 日志屏蔽，使得接收端不在线时，推流服务依然能正常稳定工作。
+- **空挂断容错**：在 `UdpSender::send` 中对套接字 `ECONNREFUSED` 异常进行拦截和日志屏蔽，使得接收端不在线时，推流服务依然能正常稳定工作。
 
 ---
 
@@ -139,13 +135,12 @@ VisionCast/
 │   ├── visioncast_config.json          # 主程序总控配置
 │   ├── video_13855.json                # 13855 MIPI 摄像头采集参数
 │   ├── video_usb_c270.json             # USB C270 采集与备用参数
-│   ├── audio_main_mic.json             # 主麦克风采集配置
-│   └── encoder_h264_low_latency.json   # 编码器参数
+│   └── audio_main_mic.json             # 主麦克风采集配置
 │
 ├── include/                            # 系统头文件目录
 │   ├── common/                         # 公共组件 (日志、配置、阻塞队列等)
 │   ├── media/                          # 媒体设备 (采集、RGA转换、硬编码器)
-│   ├── transport/                      # 网络传输 (RTMP、RTSP、UDP、WebRTC)
+│   ├── transport/                      # 网络传输 (RTMP、UDP、WebRTC)
 │   └── pipeline/                       # 调度管线 (音视频 Pipeline)
 │
 ├── src/                                # 系统源码目录
@@ -156,6 +151,7 @@ VisionCast/
 │   └── pipeline/
 │
 ├── docs/                               # 核心技术设计及测试指南
+│   ├── 预研与开发文档.md               # 项目开发总结文档
 │   ├── pipeline_design.md              # 音视频流数据管线设计 (本文件)
 │   ├── camera_13855_flow.md            # 13855 视频流处理链路
 │   ├── audio_nau8822_flow.md           # nau8822 音频捕获链路
@@ -177,7 +173,7 @@ VisionCast/
 │   ├── build/                          # 编译与打包脚本 (device_build.sh等)
 │   └── run/                            # 设备推流运行快捷脚本
 │
-└── mediamtx/                           # 预置的 MediaMTX 服务端 (含配置文件)
+└── mediamtx/                           # 预置 of MediaMTX 服务端 (含配置文件)
 ```
 
 ---

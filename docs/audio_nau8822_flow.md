@@ -82,7 +82,7 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 [AudioEncoder] (PCMA 编码 / AAC 编码)
      │
      ▼
-[AvTransport] (封装 RTP / RTSP / RTMP / WebRTC)
+[AvTransport] (封装 RTP / RTMP / WebRTC)
 ```
 
 ---
