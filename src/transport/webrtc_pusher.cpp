@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -17,6 +19,7 @@
 
 #if defined(VISIONCAST_ENABLE_WEBRTC)
 #include "rtc/rtc.hpp"
+#include "rtc/rtc.h"
 #endif
 
 namespace visioncast {
@@ -34,6 +37,62 @@ struct ParsedHttpUrl {
 };
 
 #if defined(VISIONCAST_ENABLE_WEBRTC)
+bool get_resolved_local_ip(const std::string& host, std::string& local_ip) {
+    if (host == "localhost") {
+        local_ip = "127.0.0.1";
+        return true;
+    }
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* results = nullptr;
+    if (getaddrinfo(host.c_str(), nullptr, &hints, &results) != 0) {
+        return false;
+    }
+    
+    ifaddrs* interfaces = nullptr;
+    if (getifaddrs(&interfaces) != 0) {
+        freeaddrinfo(results);
+        return false;
+    }
+    
+    bool found = false;
+    for (addrinfo* r = results; r != nullptr && !found; r = r->ai_next) {
+        for (ifaddrs* ifa = interfaces; ifa != nullptr; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr) continue;
+            if (r->ai_addr->sa_family != ifa->ifa_addr->sa_family) continue;
+            
+            if (r->ai_addr->sa_family == AF_INET) {
+                auto* sin_r = reinterpret_cast<sockaddr_in*>(r->ai_addr);
+                auto* sin_ifa = reinterpret_cast<sockaddr_in*>(ifa->ifa_addr);
+                if (sin_r->sin_addr.s_addr == sin_ifa->sin_addr.s_addr) {
+                    char buf[INET_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET, &sin_r->sin_addr, buf, sizeof(buf))) {
+                        local_ip = buf;
+                        found = true;
+                    }
+                    break;
+                }
+            } else if (r->ai_addr->sa_family == AF_INET6) {
+                auto* sin6_r = reinterpret_cast<sockaddr_in6*>(r->ai_addr);
+                auto* sin6_ifa = reinterpret_cast<sockaddr_in6*>(ifa->ifa_addr);
+                if (std::memcmp(&sin6_r->sin6_addr, &sin6_ifa->sin6_addr, sizeof(in6_addr)) == 0) {
+                    char buf[INET6_ADDRSTRLEN];
+                    if (inet_ntop(AF_INET6, &sin6_r->sin6_addr, buf, sizeof(buf))) {
+                        local_ip = buf;
+                        found = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    freeifaddrs(interfaces);
+    freeaddrinfo(results);
+    return found;
+}
+
 bool parse_http_url(const std::string& url, ParsedHttpUrl& parsed, std::string& error) {
     constexpr const char* scheme = "http://";
     if (url.rfind(scheme, 0) != 0) {
@@ -45,8 +104,8 @@ bool parse_http_url(const std::string& url, ParsedHttpUrl& parsed, std::string& 
     const std::size_t path_start = url.find('/', authority_start);
     const std::string authority =
         url.substr(authority_start, path_start == std::string::npos
-                                        ? std::string::npos
-                                        : path_start - authority_start);
+                                         ? std::string::npos
+                                         : path_start - authority_start);
     if (authority.empty()) {
         error = "invalid WHIP URL host: " + url;
         return false;
@@ -225,13 +284,29 @@ bool WebRtcPusher::connect(std::string& error) {
         return true;
     }
 
+    static bool logger_initialized = false;
+    if (!logger_initialized) {
+        rtcInitLogger(RTC_LOG_DEBUG, nullptr);
+        logger_initialized = true;
+    }
+
     try {
         rtc::Configuration config;
         config.disableAutoNegotiation = true;
         config.forceMediaTransport = true;
+
+        ParsedHttpUrl endpoint;
+        std::string parse_err;
+        if (parse_http_url(whip_url_, endpoint, parse_err)) {
+            std::string local_ip;
+            if (get_resolved_local_ip(endpoint.host, local_ip)) {
+                config.bindAddress = local_ip;
+                VC_LOG_INFO("webrtc", "Local endpoint detected, binding WebRTC client to " + local_ip);
+            }
+        }
+
         // 在纯局域网环境下，不需要外网 STUN 服务器，避免因 DNS 解析超时导致启动挂起
         // config.iceServers.emplace_back("stun:stun.l.google.com:19302");
-
         impl_->pc = std::make_shared<rtc::PeerConnection>(config);
         impl_->pc->onStateChange([this](rtc::PeerConnection::State state) {
             std::lock_guard<std::mutex> lock(impl_->mutex);
@@ -285,20 +360,35 @@ bool WebRtcPusher::connect(std::string& error) {
             }
         }
 
+        // Force the client to be the DTLS active role (client) to initiate handshake
+        std::string modified_offer = impl_->local_sdp;
+        size_t pos = 0;
+        while ((pos = modified_offer.find("a=setup:actpass", pos)) != std::string::npos) {
+            modified_offer.replace(pos, 15, "a=setup:active");
+            pos += 14;
+        }
+
         std::string answer_sdp;
-        if (!http_post_sdp(whip_url_, impl_->local_sdp, answer_sdp, error)) {
+        if (!http_post_sdp(whip_url_, modified_offer, answer_sdp, error)) {
             disconnect();
             return false;
         }
+        VC_LOG_INFO("webrtc", "Local SDP (Offer) [Modified to setup:active]:\n" + modified_offer);
+        VC_LOG_INFO("webrtc", "Remote SDP (Answer):\n" + answer_sdp);
         impl_->pc->setRemoteDescription(rtc::Description(answer_sdp, "answer"));
 
         {
             std::unique_lock<std::mutex> lock(impl_->mutex);
-            impl_->cv.wait_for(lock, std::chrono::seconds(10), [this] {
+            const bool finished = impl_->cv.wait_for(lock, std::chrono::seconds(10), [this] {
                 return impl_->connected || impl_->failed;
             });
             if (impl_->failed) {
                 error = impl_->state_error;
+                disconnect();
+                return false;
+            }
+            if (!finished || !impl_->connected) {
+                error = "WebRTC connection timed out (ICE gathering/handshake failed)";
                 disconnect();
                 return false;
             }
