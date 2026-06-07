@@ -33,7 +33,7 @@
     "protocol": "rtp",
     "rtmp_url": "rtmp://{server_ip}:1935/live/stream",
     "webrtc_url": "http://{server_ip}:8889/live/stream/whip",
-    "server_ip": "192.168.190.128",
+    "server_ip": "127.0.0.1",
     "video_port": 5004,
     "audio_port": 5006,
     "sdp_path": "test.sdp"

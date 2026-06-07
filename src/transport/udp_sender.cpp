@@ -64,6 +64,10 @@ bool UdpSender::send(const std::uint8_t* data, std::size_t size, std::string& er
     }
     const ssize_t sent = ::send(fd_, data, size, MSG_NOSIGNAL);
     if (sent < 0) {
+        if (errno == ECONNREFUSED) {
+            // Ignore connection refused (no receiver listening yet)
+            return true;
+        }
         error = std::string("UDP send: ") + std::strerror(errno);
         return false;
     }
