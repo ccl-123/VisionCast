@@ -286,6 +286,9 @@ if [[ "${DO_DEPLOY}" == true ]]; then
             if [[ ! -e "${local_path}" && ! -L "${local_path}" ]]; then
                 continue
             fi
+            if [[ -d "${local_path}" && ! -L "${local_path}" ]]; then
+                continue
+            fi
             filename=$(basename "${local_path}")
             if [[ -L "${local_path}" ]]; then
                 link_target=$(readlink "${local_path}")
