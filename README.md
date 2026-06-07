@@ -2,7 +2,7 @@
 
 [![Platform](https://img.shields.io/badge/Platform-ELF--RK3588-blue.svg)](https://www.elfboard.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Pre--development-orange.svg)]()
+[![Status](https://img.shields.io/badge/Status-Verified%20%26%20Running-brightgreen.svg)]()
 
 VisionCast 是一个基于 **ELF-RK3588** 开发板的智能眼镜音视频推流系统预研项目。本项目模拟智能眼镜第一视角采集场景，旨在实现高品质、低延迟的摄像头视频与麦克风音频实时采集、硬件编码（H.264/H.265）、封装并进行网络推流。
 

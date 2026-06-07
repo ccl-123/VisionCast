@@ -59,12 +59,21 @@
 - 当前限制：WHIP helper 只支持明文 `http://` URL，尚未实现 HTTPS；提示词示例和默认配置均为 `http://192.168.137.1:8889/live/stream`。
 - 待板端验证：需要 MediaMTX/SRS 等 WHIP 服务端和真实 RK3588 摄像头/音频设备，才能验证 ICE/DTLS/SRTP 建连、浏览器播放延迟和 30 分钟稳定性。
 
-## 9. 本机无法完成的硬件验收
+## 9. 本地/板端硬件及推流接收链路验证已全部走通
 
-- 本机已完成 CMake 主机构建、aarch64 交叉构建、配置解析和安装包依赖检查。
-- 由于当前环境不是 RK3588 板端，无法直接验证 `/dev/video11`、`/dev/video21`、`hw:1,0`、RGA、MPP、framebuffer、本地网络推流和 30 分钟稳定运行。
-- 板端验收建议按协议分别执行：
-  - UDP：`ffplay -protocol_whitelist file,udp,rtp -i test.sdp`
-  - RTSP：`ffplay rtsp://192.168.137.202:8554/live`
-  - RTMP：`ffplay rtmp://localhost:1935/live/stream`
-  - WebRTC：启动 MediaMTX/SRS WHIP 服务后浏览器访问对应 WebRTC 播放地址。
+- **验证状态**：在 RK3588 实物板卡与虚拟机之间成功完成了流媒体接收和本地渲染的完整全链路验证。
+- **协议推流验证**：
+  - **RTMP 模式**：通过 SSH 远程端口映射，将板端的 RTMP 推流经由 `127.0.0.1:1935` 成功发送至虚拟机上运行的 MediaMTX 服务端，日志报告 `is publishing to path 'live/stream'`。
+  - **WebRTC 模式**：通过 WHIP 信令在 `127.0.0.1:8889` 建立会话，PeerConnection 成功连接，流状态在线，VM 端成功接收到 H.264/G.711 音视频流。
+
+## 10. Ubuntu 桌面环境下本地预览不可见问题 (DisplayRenderer)
+
+- **现象**：在板端启动脚本后，Ubuntu 图形界面桌面上没有任何本地预览画面，直接写入 `/dev/fb0` 没有反应。
+- **原因**：当系统运行着 X11/Wayland (GDM/GNOME) 桌面管理器时，桌面的渲染会不断重绘并覆盖直接写入帧缓冲区 `/dev/fb0` 的像素。
+- **处理**：在 `DisplayRenderer` 中实现 `X11Window` 后端。使用 `dlopen("libX11.so.6")` 和 `dlsym` 动态加载 X11 API，在 `DISPLAY` 环境变量可用时，自动创建一个 X11 窗口并在其中显示画面，同时集成了 RGA 硬件缩放和 NV12->RGB 格式转换，运行效率高且保持了对非 GUI 终端的兼容（无 X11 时自动退回 `/dev/fb0` Framebuffer 渲染）。
+
+## 11. OV13855 强光/弱光环境帧率下降问题 (Fixed-Rate V4L2 Control)
+
+- **现象**：MIPI 摄像头 `/dev/video11` 默认配置为 30 FPS，但实际运行时一直保持在 15 FPS 左右，调整 `VIDIOC_S_PARM` 返回 Inappropriate ioctl for device 警告。
+- **原因**：自动曝光算法控制服务 `rkaiq_3A_server` 在室内较暗环境下会自动调节曝光时间并大幅度拉长 vertical blanking（垂直消隐时间），导致物理输出帧率降到 15 FPS。
+- **处理**：在 `VideoCapture` 中新增了 `configure_sensor_frame_rate` 函数。该函数直接打开配置的传感器子设备(`/dev/v4l-subdev2`)，在启动时将 `V4L2_CID_EXPOSURE` 曝光参数和 `V4L2_CID_VBLANK` 垂直消隐锁定在固定值（例如曝光 3000，vblank 78），从而锁定了 sensor 物理帧率在 30 FPS，不受外部环境光线强弱影响。
