@@ -39,6 +39,25 @@ const char* level_name(LogLevel level) {
     return "UNKNOWN";
 }
 
+const char* ANSI_RESET = "\033[0m";
+
+/**
+ * @brief 辅助函数：根据日志级别获取对应的 ANSI 颜色控制字符。
+ */
+const char* level_color(LogLevel level) {
+    switch (level) {
+        case LogLevel::Debug:
+            return "\033[36m"; // 青色 (Cyan)
+        case LogLevel::Info:
+            return "\033[32m"; // 绿色 (Green)
+        case LogLevel::Warn:
+            return "\033[33m"; // 黄色 (Yellow)
+        case LogLevel::Error:
+            return "\033[31m"; // 红色 (Red)
+    }
+    return "\033[0m";
+}
+
 /**
  * @brief 获取格式化的当前本地时间字符串，精确到毫秒级。
  * 
@@ -84,9 +103,11 @@ void log_message(LogLevel level,
     }
 
     std::ostream& output = std::cout; // 默认输出到标准输出设备 (stdout)
-    output << '[' << now_text() << "] "
+    output << level_color(level)
+           << '[' << now_text() << "] "
            << '[' << level_name(level) << "] "
            << '[' << component << "] "
+           << ANSI_RESET
            << message;
     if (level == LogLevel::Debug) {
         // Debug 级别下额外输出文件名和行号，辅助定位问题
