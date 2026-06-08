@@ -1,0 +1,52 @@
+{
+  "//comment_1": "H.265 低延迟推流配置；协议可在 protocol 中选择 webrtc、rtmp 或 rtp。",
+  "//comment_2": "RTMP H.265 需要服务端和播放器支持 Enhanced RTMP/HEVC；兼容性优先时使用 visioncast_config.json 的 H.264 默认配置。",
+  "video": {
+    "source": "mipi_13855",
+    "fallback_source": "usb_c270",
+    "device": "/dev/video11",
+    "fallback_device": "/dev/video21",
+    "fallback_format": "MJPEG",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "format": "NV12",
+    "sensor_subdev": "/dev/v4l-subdev2",
+    "crop_left": 0,
+    "crop_top": 380,
+    "crop_width": 4224,
+    "crop_height": 2376,
+    "sensor_exposure": 1928,
+    "sensor_vblank": 78,
+    "sensor_analogue_gain": 1536
+  },
+  "audio": {
+    "device": "hw:1,0",
+    "sample_rate": 48000,
+    "capture_channels": 2,
+    "channels": 2,
+    "format": "S16_LE",
+    "frame_ms": 20
+  },
+  "encoder": {
+    "video_codec": "h265",
+    "bitrate": 6000000,
+    "gop": 30,
+    "low_latency": true,
+    "b_frames": 0
+  },
+  "stream": {
+    "protocol": "webrtc",
+    "rtmp_url": "rtmp://192.168.137.1:1936/live/stream",
+    "webrtc_url": "http://192.168.137.1:8891/live/stream/whip",
+    "server_ip": "192.168.137.1",
+    "video_port": 5004,
+    "audio_port": 5006,
+    "sdp_path": "test.sdp"
+  },
+  "debug": {
+    "enable_perf_log": true,
+    "enable_preview": false,
+    "enable_dump_frame": false
+  }
+}

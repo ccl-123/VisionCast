@@ -8,7 +8,10 @@ if [[ ! -x "${INSTALL_DIR}/bin/visioncast" &&
     INSTALL_DIR="${INSTALL_DIR}/install/visioncast"
 fi
 BIN="${INSTALL_DIR}/bin/visioncast"
-CONFIG="${INSTALL_DIR}/config/visioncast_config.json"
+CONFIG="${VISIONCAST_CONFIG:-${INSTALL_DIR}/config/visioncast_config.json}"
+if [[ "${CONFIG}" != /* ]]; then
+    CONFIG="${INSTALL_DIR}/${CONFIG}"
+fi
 
 if [[ ! -x "${BIN}" ]]; then
     echo "visioncast executable not found: ${BIN}"
