@@ -90,6 +90,7 @@ std::size_t AudioPipeline::dropped_frames() const {
 void AudioPipeline::worker_loop() {
     std::size_t frames = 0;
     std::size_t sent_bytes = 0;
+    std::uint64_t total_latency_us = 0;
     std::uint64_t last_log = monotonic_now_us(); // 记录上一次打印日志的单调时间戳
 
     while (running_) {
@@ -113,27 +114,36 @@ void AudioPipeline::worker_loop() {
             running_ = false;
             break;
         }
+        const std::uint64_t send_done_us = monotonic_now_us();
         sent_bytes += input_bytes;
+        if (raw.pts_us > 0 && send_done_us >= raw.pts_us) {
+            total_latency_us += send_done_us - raw.pts_us;
+        }
         ++frames;
 
         // 周期性（每秒）计算音频码率、帧率、丢包队列等统计指标
-        const std::uint64_t now = monotonic_now_us();
+        const std::uint64_t now = send_done_us;
         if (config_.debug.enable_perf_log && now - last_log >= 1000000ULL) {
             const double seconds = static_cast<double>(now - last_log) / 1000000.0;
             const double kbps = static_cast<double>(sent_bytes * 8U) / seconds / 1000.0;
-            const double avg_pack_bytes = frames > 0 ? (static_cast<double>(sent_bytes) / frames) : 0.0;
+            const double avg_pack_kb =
+                frames > 0 ? (static_cast<double>(sent_bytes) / frames / 1024.0) : 0.0;
+            const double avg_latency_ms =
+                frames > 0 ? (static_cast<double>(total_latency_us) / frames / 1000.0) : 0.0;
 
             std::ostringstream log_str;
             log_str << std::fixed << std::setprecision(2)
-                    << "frames=" << frames
-                    << " bitrate_kbps=" << kbps
-                    << " avg_bytes=" << avg_pack_bytes
-                    << " drop_frames=" << raw_queue_.dropped()
-                    << " queue_raw=" << raw_queue_.size();
-            VC_LOG_INFO("AudioPipeline", log_str.str());
+                    << "帧数=" << frames
+                    << " 码率kbps=" << kbps
+                    << " 平均KB=" << avg_pack_kb
+                    << " 延迟ms=" << avg_latency_ms
+                    << " 丢帧=" << raw_queue_.dropped()
+                    << " 原始队列=" << raw_queue_.size();
+            VC_LOG_INFO("音频流水线", log_str.str());
 
             frames = 0;
             sent_bytes = 0;
+            total_latency_us = 0;
             last_log = now;
         }
     }

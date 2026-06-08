@@ -106,6 +106,7 @@ std::size_t VideoPipeline::dropped_frames() const {
 void VideoPipeline::worker_loop() {
     std::size_t processed = 0;
     std::size_t sent_bytes = 0;
+    std::uint64_t total_latency_us = 0;
     std::uint64_t last_log = monotonic_now_us(); // 记录性能日志周期的时间戳
 
     while (running_) {
@@ -160,11 +161,15 @@ void VideoPipeline::worker_loop() {
             running_ = false;
             break;
         }
+        const std::uint64_t send_done_us = monotonic_now_us();
         sent_bytes += encoded.data.size();
+        if (raw.pts_us > 0 && send_done_us >= raw.pts_us) {
+            total_latency_us += send_done_us - raw.pts_us;
+        }
         ++processed;
 
         // 周期性（每秒）统计并输出视频流水线性能指标：包括实际 FPS、RGA 耗时（标注硬件 HW 还是软件 SW 兜底）、MPP 编码耗时、发送码率等
-        const std::uint64_t now = monotonic_now_us();
+        const std::uint64_t now = send_done_us;
         if (config_.debug.enable_perf_log && now - last_log >= 1000000ULL) {
             const double seconds = static_cast<double>(now - last_log) / 1000000.0;
             const double fps = static_cast<double>(processed) / seconds;
@@ -172,21 +177,26 @@ void VideoPipeline::worker_loop() {
             const double rga_ms = static_cast<double>(t_process_end - t_process_start) / 1000.0;
             const double mpp_ms = static_cast<double>(t_encode_end - t_encode_start) / 1000.0;
             const std::string rga_mode = processor_.is_hardware_accelerated() ? "HW" : "SW";
-            const double avg_pack_bytes = processed > 0 ? (static_cast<double>(sent_bytes) / processed) : 0.0;
+            const double avg_pack_kb =
+                processed > 0 ? (static_cast<double>(sent_bytes) / processed / 1024.0) : 0.0;
+            const double avg_latency_ms =
+                processed > 0 ? (static_cast<double>(total_latency_us) / processed / 1000.0) : 0.0;
 
             std::ostringstream log_str;
             log_str << std::fixed << std::setprecision(2)
-                    << "fps=" << fps
-                    << " rga_ms=" << rga_ms << " (" << rga_mode << ")"
-                    << " mpp_ms=" << mpp_ms << " (HW)"
-                    << " bitrate_kbps=" << kbps
-                    << " avg_bytes=" << avg_pack_bytes
-                    << " drop_frames=" << raw_queue_.dropped()
-                    << " queue_raw=" << raw_queue_.size();
-            VC_LOG_INFO("VideoPipeline", log_str.str());
+                    << "帧率fps=" << fps
+                    << " RGA耗时ms=" << rga_ms << " (" << rga_mode << ")"
+                    << " MPP耗时ms=" << mpp_ms << " (HW)"
+                    << " 码率kbps=" << kbps
+                    << " 平均KB=" << avg_pack_kb
+                    << " 延迟ms=" << avg_latency_ms
+                    << " 丢帧=" << raw_queue_.dropped()
+                    << " 原始队列=" << raw_queue_.size();
+            VC_LOG_INFO("视频流水线", log_str.str());
 
             processed = 0;
             sent_bytes = 0;
+            total_latency_us = 0;
             last_log = now;
         }
     }

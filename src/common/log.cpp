@@ -61,7 +61,7 @@ const char* level_color(LogLevel level) {
 /**
  * @brief 获取格式化的当前本地时间字符串，精确到毫秒级。
  * 
- * 格式示例: "YYYY-MM-DD HH:MM:SS.mmm"
+ * 格式示例: "HH:MM:SS.mmm"
  */
 std::string now_text() {
     auto now = std::chrono::system_clock::now();
@@ -75,7 +75,7 @@ std::string now_text() {
     localtime_r(&time, &local_time); // 使用线程安全的 localtime_r 获取本地时间
 
     std::ostringstream out;
-    out << std::put_time(&local_time, "%F %T")
+    out << std::put_time(&local_time, "%T")
         << '.' << std::setw(3) << std::setfill('0') << ms.count(); // 补齐三位毫秒
     return out.str();
 }
