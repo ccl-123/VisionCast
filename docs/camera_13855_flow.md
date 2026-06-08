@@ -75,8 +75,9 @@
 
 - **RKISP 处理**：RKISP 对 RAW 图像执行黑电平校正、去马赛克 (Demosaicing)、镜头阴影校正、自动白平衡/曝光以及降噪锐化，最终输出正常的 YUV/NV12 格式画面。
 - **RKAIQ 3A 服务**：板端后台运行 `rkaiq_3A_server` 服务，监听 statistics 节点（如 `/dev/video18/19`）并计算 ISP 参数，写入 params 节点控制 ISP。
-- **固定帧率控制 (Fixed-Rate Control)**：
-  在室内或弱光环境下，3A 算法默认会自动拉长 vertical blanking（垂直消隐时间）降低帧率到 15 FPS。系统通过在 `VideoCapture` 中调用 `configure_sensor_frame_rate` 对子设备 `/dev/v4l-subdev2` 发送 `V4L2_CID_EXPOSURE` 和 `V4L2_CID_VBLANK` 控制项，锁定曝光与消隐参数，从而保证了物理输出稳定在 **30 FPS**，不受环境光强弱影响。
+- **固定帧率与防频闪控制 (Fixed-Rate / Anti-Flicker Control)**：
+  在室内或弱光环境下，3A 算法默认会自动拉长 vertical blanking（垂直消隐时间）降低帧率到 15 FPS。系统通过在 `VideoCapture` 中调用 `configure_sensor_frame_rate` 对子设备 `/dev/v4l-subdev2` 发送 `V4L2_CID_EXPOSURE`、`V4L2_CID_VBLANK` 和 `V4L2_CID_ANALOGUE_GAIN` 控制项，锁定曝光、消隐和增益参数，从而保证物理输出稳定在 **30 FPS**。
+- **13855 当前调参**：默认 `sensor_exposure=1928`、`sensor_vblank=78`、`sensor_analogue_gain=1536`，用于贴近 50Hz 灯光的 20ms 积分窗口，减少滚动快门横向明暗带；同时通过 `crop=0,380,4224x2376` 固定 16:9 输入区域，避免 ISP 沿用不确定的上一次 crop 状态。
 
 ---
 

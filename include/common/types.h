@@ -30,8 +30,13 @@ struct VideoConfig {
     int fps = 30;                               ///< 目标采集及编码帧率（Frames Per Second）
     std::string format = "NV12";                ///< 编码前图像格式，例如 MPP 常用 "NV12"，或 "YUYV" 等
     std::string sensor_subdev;                  ///< 图像传感器的 V4L2 子设备文件路径（用于直控曝光与空白期参数）
+    int crop_left = -1;                         ///< V4L2 crop 左上角 X，-1表示不手动配置
+    int crop_top = -1;                          ///< V4L2 crop 左上角 Y，-1表示不手动配置
+    int crop_width = 0;                         ///< V4L2 crop 宽度，0表示不手动配置
+    int crop_height = 0;                        ///< V4L2 crop 高度，0表示不手动配置
     int sensor_exposure = 0;                    ///< 图像传感器手动曝光值（0表示自动曝光）
     int sensor_vblank = -1;                     ///< 图像传感器垂直空白期设置（vblank），用于调整帧率或曝光上限，-1表示不手动配置
+    int sensor_analogue_gain = -1;              ///< 图像传感器模拟增益，-1表示不手动配置
 };
 
 /**

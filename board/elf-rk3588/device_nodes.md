@@ -39,7 +39,7 @@
 ## 3. 13855 MIPI 摄像头节点确认与特性
 - **最终物理节点**：`/dev/video11` (rkisp_mainpath)。
 - **视频帧能力**：输出 1280x720 30FPS，格式为多平面 NV12。
-- **稳定性控制**：由 `VideoCapture` 底层通过调用 `/dev/v4l-subdev2` 锁定 Vertical Blanking 与 Exposure 寄存器值，消除暗光对物理帧率的干扰，帧率强行维持在 30 FPS。
+- **稳定性控制**：由 `VideoCapture` 底层通过 V4L2 selection 固定 16:9 crop，并调用 `/dev/v4l-subdev2` 锁定 Vertical Blanking、Exposure 与 Analogue Gain，消除暗光对物理帧率的干扰，减少灯光频闪横纹，并限制最大增益带来的条纹噪声。
 
 ---
 

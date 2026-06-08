@@ -337,8 +337,15 @@ void apply_video_config(const std::string& object, VideoConfig& video) {
     if (auto value = int_value(object, "fps")) video.fps = *value;
     if (auto value = string_value(object, "format")) video.format = *value;
     if (auto value = string_value(object, "sensor_subdev")) video.sensor_subdev = *value;
+    if (auto value = int_value(object, "crop_left")) video.crop_left = *value;
+    if (auto value = int_value(object, "crop_top")) video.crop_top = *value;
+    if (auto value = int_value(object, "crop_width")) video.crop_width = *value;
+    if (auto value = int_value(object, "crop_height")) video.crop_height = *value;
     if (auto value = int_value(object, "sensor_exposure")) video.sensor_exposure = *value;
     if (auto value = int_value(object, "sensor_vblank")) video.sensor_vblank = *value;
+    if (auto value = int_value(object, "sensor_analogue_gain")) {
+        video.sensor_analogue_gain = *value;
+    }
 }
 
 /**
@@ -488,8 +495,13 @@ std::string summarize_config(const VisionCastConfig& config) {
         << ", format=" << config.video.format;
     if (!config.video.sensor_subdev.empty()) {
         out << ", sensor_subdev=" << config.video.sensor_subdev
+            << ", crop=" << config.video.crop_left
+            << "," << config.video.crop_top
+            << "," << config.video.crop_width
+            << "x" << config.video.crop_height
             << ", sensor_exposure=" << config.video.sensor_exposure
-            << ", sensor_vblank=" << config.video.sensor_vblank;
+            << ", sensor_vblank=" << config.video.sensor_vblank
+            << ", sensor_analogue_gain=" << config.video.sensor_analogue_gain;
     }
     out << '\n';
     out << "Audio: device=" << config.audio.device

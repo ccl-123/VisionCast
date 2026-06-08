@@ -49,7 +49,7 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 ### 3.1 核心输入：13855 MIPI CSI 摄像头
 - **物理路径**：13855 MIPI Sensor → MIPI CSI-2 → RKCIF → RKISP → rkisp_mainpath (`/dev/video11`)。
 - **图像格式**：由 ISP 输出 NV12 格式。
-- **采集机制**：采用 V4L2 多平面采集 (MPLANE) 模式，MMAP 方式申请 4 个 Buffer 帧缓冲区。使用 `configure_sensor_frame_rate` 强制锁定垂直消隐 (vblank) 与曝光，确保物理帧率稳定在 30 FPS。
+- **采集机制**：采用 V4L2 多平面采集 (MPLANE) 模式，MMAP 方式申请 4 个 Buffer 帧缓冲区。使用 V4L2 selection 固定 16:9 crop，并通过 `configure_sensor_frame_rate` 强制锁定垂直消隐 (vblank)、曝光和模拟增益，确保物理帧率稳定在 30 FPS，减少室内灯光频闪横纹并限制暗光最大增益噪声。
 
 ### 3.2 调试与备用输入：USB C270 摄像头
 - **物理路径**：USB C270 → `/dev/video21` (UVC)。

@@ -10,8 +10,13 @@
     "fps": 30,
     "format": "NV12",
     "sensor_subdev": "/dev/v4l-subdev2",
-    "sensor_exposure": 3000,
-    "sensor_vblank": 78
+    "crop_left": 0,
+    "crop_top": 380,
+    "crop_width": 4224,
+    "crop_height": 2376,
+    "sensor_exposure": 1928,
+    "sensor_vblank": 78,
+    "sensor_analogue_gain": 1536
   },
   "debug": {
     "enable_preview": true

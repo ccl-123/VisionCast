@@ -3,6 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+if [[ ! -x "${INSTALL_DIR}/bin/visioncast" &&
+      -x "${INSTALL_DIR}/install/visioncast/bin/visioncast" ]]; then
+    INSTALL_DIR="${INSTALL_DIR}/install/visioncast"
+fi
 BIN="${INSTALL_DIR}/bin/visioncast"
 CONFIG="${INSTALL_DIR}/config/video_usb_c270.json"
 

@@ -224,7 +224,37 @@ bool is_mplane_type(v4l2_buf_type type) {
     return type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 }
 
-// 针对特定摄像头（如 MIPI 摄像头 subdev 设备），直接通过 VIDIOC_S_CTRL 设置曝光量 (exposure) 和垂直消隐 (vblank) 控制字，锁死传感器帧率。
+void configure_video_crop(int fd,
+                          v4l2_buf_type type,
+                          const VideoConfig& config,
+                          const std::string& device) {
+    if (config.crop_left < 0 || config.crop_top < 0 ||
+        config.crop_width <= 0 || config.crop_height <= 0) {
+        return;
+    }
+
+    v4l2_selection selection{};
+    selection.type = type;
+    selection.target = V4L2_SEL_TGT_CROP;
+    selection.r.left = config.crop_left;
+    selection.r.top = config.crop_top;
+    selection.r.width = config.crop_width;
+    selection.r.height = config.crop_height;
+    if (ioctl(fd, VIDIOC_S_SELECTION, &selection) != 0) {
+        VC_LOG_WARN("video-capture",
+                    errno_text("VIDIOC_S_SELECTION crop " + device));
+        return;
+    }
+
+    VC_LOG_INFO("video-capture",
+                "video crop applied: left=" + std::to_string(selection.r.left) +
+                    " top=" + std::to_string(selection.r.top) +
+                    " size=" + std::to_string(selection.r.width) +
+                    "x" + std::to_string(selection.r.height));
+}
+
+// 针对特定摄像头（如 MIPI 摄像头 subdev 设备），直接通过 VIDIOC_S_CTRL
+// 设置曝光、垂直消隐和模拟增益，避免 3A 空闲状态遗留的高增益带来条纹噪声。
 void configure_sensor_frame_rate(const VideoConfig& config,
                                  const std::string& active_device) {
     if (config.sensor_subdev.empty() || active_device != config.device) {
@@ -262,11 +292,17 @@ void configure_sensor_frame_rate(const VideoConfig& config,
         set_control(V4L2_CID_EXPOSURE, config.sensor_exposure, "exposure");
     const bool vblank_ok =
         set_control(V4L2_CID_VBLANK, config.sensor_vblank, "vertical_blanking");
-    if (exposure_ok && vblank_ok) {
+    const bool gain_ok =
+        set_control(V4L2_CID_ANALOGUE_GAIN,
+                    config.sensor_analogue_gain,
+                    "analogue_gain");
+    if (exposure_ok && vblank_ok && gain_ok) {
         VC_LOG_INFO("video-capture",
-                    "sensor fixed-rate controls applied: exposure=" +
+                    "sensor controls applied: exposure=" +
                         std::to_string(config.sensor_exposure) +
-                        " vblank=" + std::to_string(config.sensor_vblank));
+                        " vblank=" + std::to_string(config.sensor_vblank) +
+                        " analogue_gain=" +
+                        std::to_string(config.sensor_analogue_gain));
     }
     close(sensor_fd);
 }
@@ -499,6 +535,8 @@ void VideoCapture::capture_loop() {
             continue;
         }
 
+        configure_video_crop(fd, type, config_, device);
+
         // 3. 配置视频流参数，如帧率 (VIDIOC_S_PARM)
         v4l2_streamparm parm{};
         parm.type = type;
@@ -517,6 +555,8 @@ void VideoCapture::capture_loop() {
         if (ioctl(fd, VIDIOC_S_CTRL, &ctrl) == 0) {
             VC_LOG_INFO("video-capture", "disabled low-light framerate throttling on " + device);
         }
+
+        configure_sensor_frame_rate(config_, device);
 
         // 5. 申请内核 MMAP 缓冲区结构组 (VIDIOC_REQBUFS)
         v4l2_requestbuffers req{};
@@ -635,7 +675,6 @@ void VideoCapture::capture_loop() {
             close(fd);
             continue;
         }
-        configure_sensor_frame_rate(config_, device);
 
         const int active_width = static_cast<int>(
             is_mplane_type(type) ? fmt.fmt.pix_mp.width : fmt.fmt.pix.width);
@@ -644,9 +683,26 @@ void VideoCapture::capture_loop() {
         const int active_stride = static_cast<int>(
             is_mplane_type(type) ? fmt.fmt.pix_mp.plane_fmt[0].bytesperline
                                  : fmt.fmt.pix.bytesperline);
+        const std::size_t active_sizeimage =
+            is_mplane_type(type) ? fmt.fmt.pix_mp.plane_fmt[0].sizeimage
+                                 : fmt.fmt.pix.sizeimage;
+        if (active_width != config_.width || active_height != config_.height) {
+            VC_LOG_WARN("video-capture",
+                        device + " negotiated " + std::to_string(active_width) +
+                            "x" + std::to_string(active_height) +
+                            " instead of requested " +
+                            std::to_string(config_.width) + "x" +
+                            std::to_string(config_.height));
+        }
         VC_LOG_INFO("video-capture", "capturing from " + device + " type=" +
                                          (is_mplane_type(type) ? "mplane" : "single") +
-                                         " fmt=" + fourcc_to_string(active_fourcc));
+                                         " fmt=" + fourcc_to_string(active_fourcc) +
+                                         " size=" + std::to_string(active_width) +
+                                         "x" + std::to_string(active_height) +
+                                         " stride=" +
+                                         std::to_string(active_stride) +
+                                         " sizeimage=" +
+                                         std::to_string(active_sizeimage));
         finish_initialization(true);
         std::uint64_t sequence = 0;
         bool warned_unsupported_dmabuf_planes = false;
