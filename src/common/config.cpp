@@ -381,6 +381,7 @@ void apply_stream_config(const std::string& object, StreamConfig& stream) {
  */
 void apply_debug_config(const std::string& object, DebugConfig& debug) {
     if (auto value = bool_value(object, "enable_perf_log")) debug.enable_perf_log = *value;
+    if (auto value = bool_value(object, "enable_preview")) debug.enable_preview = *value;
     if (auto value = bool_value(object, "enable_dump_frame")) debug.enable_dump_frame = *value;
 }
 
@@ -509,6 +510,7 @@ std::string summarize_config(const VisionCastConfig& config) {
         << ", audio_port=" << config.stream.audio_port
         << ", sdp_path=" << config.stream.sdp_path << '\n';
     out << "Debug: perf_log=" << bool_text(config.debug.enable_perf_log)
+        << ", preview=" << bool_text(config.debug.enable_preview)
         << ", dump_frame=" << bool_text(config.debug.enable_dump_frame);
     return out.str();
 }

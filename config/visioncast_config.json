@@ -40,6 +40,7 @@
   },
   "debug": {
     "enable_perf_log": true,
+    "enable_preview": true,
     "enable_dump_frame": false
   }
 }

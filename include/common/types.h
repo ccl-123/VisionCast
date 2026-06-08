@@ -74,6 +74,7 @@ struct StreamConfig {
  */
 struct DebugConfig {
     bool enable_perf_log = true;                ///< 是否定时输出各流水线节点的延迟与帧率统计日志
+    bool enable_preview = false;                ///< 是否开启桌面/Framebuffer 本地预览显示
     bool enable_dump_frame = false;             ///< 是否将采集或编码后的裸流写入本地文件以供排查问题
 };
 

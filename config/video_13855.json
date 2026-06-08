@@ -12,5 +12,8 @@
     "sensor_subdev": "/dev/v4l-subdev2",
     "sensor_exposure": 3000,
     "sensor_vblank": 78
+  },
+  "debug": {
+    "enable_preview": true
   }
 }

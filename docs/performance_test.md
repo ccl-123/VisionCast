@@ -85,6 +85,10 @@ V4L2 bytesused JPEG payload
 
 摄像头到编码器主路径已经避免解码后整帧 NV12 用户态拷贝。仍然存在的拷贝是压缩 JPEG 输入写入 MPP、编码后 packet 提取、以及协议封包。
 
+本地桌面预览由 `debug.enable_preview` 控制。开启时，视频线程在 MPP 编码成功返回后把同一个 `VideoFrame` 移动到 `DisplayRenderer`，不是从采集端复制一份 NV12。DMA-only 帧使用 RGA fd 输入渲染，预览队列容量为 1，最多短暂多持有约 1 到 2 个 DMA-BUF 句柄；关闭时不启动显示线程，纯推流路径不会额外持有预览帧。
+
+预览不会影响后续协议发送的数据正确性，因为 RTP/RTMP/WebRTC 使用的是已经生成的 `EncodedPacket`。但显示端不是全链路零拷贝：X11 需要 `NV12 DMA-BUF -> RGA RGB/BGRA -> XPutImage`，Framebuffer 需要 `NV12 DMA-BUF -> RGA -> mmap fb`，因此开启预览会增加少量 RGA/内存带宽和显示提交开销。
+
 编码后封包阶段已经做了低风险收敛：
 
 - RTP/WebRTC：`RtpPacketizer::packetize_each()` 逐包回调发送，不再为每帧先保存完整 `vector<RtpPacket>` 后再遍历发送。

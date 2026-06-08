@@ -88,6 +88,74 @@ void write_pixel(std::uint8_t* dst,
     }
 }
 
+#if defined(VISIONCAST_ENABLE_RGA)
+bool rga_success(IM_STATUS status) {
+    return status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
+}
+
+int nv12_stride(const VideoFrame& frame) {
+    return frame.stride > 0 ? frame.stride : frame.width;
+}
+
+int nv12_vertical_stride(const VideoFrame& frame) {
+    return frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
+}
+
+bool has_cpu_nv12_storage(const VideoFrame& frame, std::size_t& y_storage) {
+    const int stride = nv12_stride(frame);
+    const int vertical_stride = nv12_vertical_stride(frame);
+    y_storage = static_cast<std::size_t>(stride) * vertical_stride;
+    return frame.data.size() >= y_storage + y_storage / 2U;
+}
+
+bool wrap_nv12_rga_source(const VideoFrame& frame, rga_buffer_t& source) {
+    if (frame.format != "NV12" || frame.width <= 0 || frame.height <= 0) {
+        return false;
+    }
+    const int stride = nv12_stride(frame);
+    const int vertical_stride = nv12_vertical_stride(frame);
+    if (frame.has_single_plane_dma()) {
+        const auto& plane = frame.dma->planes.front();
+        if (plane.fd >= 0 && plane.offset == 0) {
+            source = wrapbuffer_fd_t(plane.fd,
+                                     frame.width,
+                                     frame.height,
+                                     stride,
+                                     vertical_stride,
+                                     RK_FORMAT_YCbCr_420_SP);
+            return true;
+        }
+    }
+
+    std::size_t y_storage = 0;
+    if (has_cpu_nv12_storage(frame, y_storage)) {
+        source = wrapbuffer_virtualaddr_t(const_cast<std::uint8_t*>(frame.data.data()),
+                                          frame.width,
+                                          frame.height,
+                                          stride,
+                                          vertical_stride,
+                                          RK_FORMAT_YCbCr_420_SP);
+        return true;
+    }
+    return false;
+}
+#else
+int nv12_stride(const VideoFrame& frame) {
+    return frame.stride > 0 ? frame.stride : frame.width;
+}
+
+int nv12_vertical_stride(const VideoFrame& frame) {
+    return frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
+}
+
+bool has_cpu_nv12_storage(const VideoFrame& frame, std::size_t& y_storage) {
+    const int stride = nv12_stride(frame);
+    const int vertical_stride = nv12_vertical_stride(frame);
+    y_storage = static_cast<std::size_t>(stride) * vertical_stride;
+    return frame.data.size() >= y_storage + y_storage / 2U;
+}
+#endif
+
 /**
  * @class X11Window
  * @brief 动态加载 libX11.so 并管理 X11 渲染窗口的辅助类
@@ -191,16 +259,9 @@ public:
         std::vector<std::uint8_t> pixels(
             static_cast<std::size_t>(image->bytes_per_line) * height_);
         image->data = reinterpret_cast<char*>(pixels.data());
-        const int stride = frame.stride > 0 ? frame.stride : frame.width;
-        const int vertical_stride =
-            frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
-        const std::size_t y_storage =
-            static_cast<std::size_t>(stride) * vertical_stride;
-        if (frame.data.size() < y_storage + y_storage / 2U) {
-            image->data = nullptr;
-            image->f.destroy_image(image);
-            return;
-        }
+        const int stride = nv12_stride(frame);
+        std::size_t y_storage = 0;
+        const bool has_cpu_data = has_cpu_nv12_storage(frame, y_storage);
 
         bool converted = false;
 #if defined(VISIONCAST_ENABLE_RGA)
@@ -215,25 +276,30 @@ public:
         }
         if (destination_format != 0 &&
             image->bytes_per_line == width_ * 4) {
-            rga_buffer_t source = wrapbuffer_virtualaddr_t(
-                const_cast<std::uint8_t*>(frame.data.data()),
-                frame.width,
-                frame.height,
-                stride,
-                vertical_stride,
-                RK_FORMAT_YCbCr_420_SP);
-            rga_buffer_t destination = wrapbuffer_virtualaddr_t(
-                pixels.data(),
-                width_,
-                height_,
-                width_,
-                height_,
-                destination_format);
-            const IM_STATUS status = imresize(source, destination);
-            converted =
-                status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR;
+            rga_buffer_t source{};
+            if (wrap_nv12_rga_source(frame, source)) {
+                rga_buffer_t destination = wrapbuffer_virtualaddr_t(
+                    pixels.data(),
+                    width_,
+                    height_,
+                    width_,
+                    height_,
+                    destination_format);
+                converted = rga_success(imresize(source, destination));
+            }
         }
 #endif
+        if (!converted && !has_cpu_data) {
+            static bool warned_once = false;
+            if (!warned_once) {
+                VC_LOG_WARN("display", "DMA-BUF preview requires RGA fd rendering; no CPU fallback data is available");
+                warned_once = true;
+            }
+            image->data = nullptr;
+            image->f.destroy_image(image);
+            return;
+        }
+
         // 若 RGA 硬件加速不可用，则退化至 CPU 软件双线性插值缩放与 NV12->RGB 转换
         if (!converted) {
             const auto* y_plane = frame.data.data();
@@ -429,14 +495,9 @@ public:
         if (!valid() || frame.format != "NV12" || frame.width <= 0 || frame.height <= 0) {
             return;
         }
-        const int stride = frame.stride > 0 ? frame.stride : frame.width;
-        const int vertical_stride =
-            frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
-        const std::size_t y_storage =
-            static_cast<std::size_t>(stride) * vertical_stride;
-        if (frame.data.size() < y_storage + y_storage / 2U) {
-            return;
-        }
+        const int stride = nv12_stride(frame);
+        std::size_t y_storage = 0;
+        const bool has_cpu_data = has_cpu_nv12_storage(frame, y_storage);
 
         const int bytes_per_pixel = static_cast<int>(var_.bits_per_pixel / 8U);
 
@@ -460,13 +521,8 @@ public:
         }
 
         if (dest_format != 0 && bytes_per_pixel > 0) {
-            rga_buffer_t src = wrapbuffer_virtualaddr_t(
-                const_cast<std::uint8_t*>(frame.data.data()),
-                frame.width,
-                frame.height,
-                stride,
-                vertical_stride,
-                RK_FORMAT_YCbCr_420_SP);
+            rga_buffer_t src{};
+            const bool has_rga_source = wrap_nv12_rga_source(frame, src);
 
             void* dst_addr = memory_ + static_cast<std::size_t>(var_.yoffset) * fix_.line_length +
                              static_cast<std::size_t>(var_.xoffset) * bytes_per_pixel;
@@ -479,12 +535,21 @@ public:
                 static_cast<int>(var_.yres),
                 dest_format);
 
-            IM_STATUS status = imresize(src, dst);
-            if (status == IM_STATUS_SUCCESS || status == IM_STATUS_NOERROR) {
+            IM_STATUS status = has_rga_source ? imresize(src, dst) : IM_STATUS_FAILED;
+            if (rga_success(status)) {
                 return;
             }
         }
 #endif
+
+        if (!has_cpu_data) {
+            static bool warned_once = false;
+            if (!warned_once) {
+                VC_LOG_WARN("display", "DMA-BUF framebuffer preview requires RGA fd rendering; no CPU fallback data is available");
+                warned_once = true;
+            }
+            return;
+        }
 
         // 若硬件加速不可用，则执行 CPU 软件色彩空间转换并按行写入映射的显存
         const auto* y_plane = frame.data.data();

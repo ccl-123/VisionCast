@@ -18,5 +18,8 @@
     "video_port": 5004,
     "audio_port": 5006,
     "sdp_path": "test.sdp"
+  },
+  "debug": {
+    "enable_preview": true
   }
 }

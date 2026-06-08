@@ -49,7 +49,7 @@
      ▼
 [MppEncoder] (H.264 Baseline 硬编码，EXT_DMA 输入)
      │
-     ├──> [DisplayRenderer] (仅 CPU 可见帧异步预览；DMA-only 主路径跳过)
+     ├──> [DisplayRenderer] (编码成功后移动同帧 VideoFrame；enable_preview=true)
      │
      ▼
 [AvTransport] (RTP / RTMP / WebRTC)
@@ -104,4 +104,4 @@
 2. **分辨率与帧率**：稳定在 `1280x720 @ 30 FPS`。
 3. **帧率防抖**：锁定了 vertical blanking 和 exposure，强弱光下物理帧率维持在 30 FPS。
 4. **备份机制**：若 `/dev/video11` MIPI 节点打开失败，程序能自动切换到备用 `/dev/video21` (USB C270)，使用 MJPEG + MPP MJPEG 硬解输出 NV12 DMA-BUF，必要时由 RGA fd-to-fd 处理，保障采集管线不中断。
-5. **零拷贝边界**：13855 到 MPP 编码输入主路径为 DMA-BUF；编码后 H.264 packet 和 RTP/RTMP/WebRTC 封包仍为 CPU 可见数据。
+5. **零拷贝边界**：13855 到 MPP 编码输入主路径为 DMA-BUF；开启预览时仅额外持有同帧 DMA-BUF 句柄并由 RGA fd 输入渲染，不复制整帧 NV12；编码后 H.264 packet、显示输出和 RTP/RTMP/WebRTC 封包仍为 CPU 可见数据。

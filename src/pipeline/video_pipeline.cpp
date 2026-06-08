@@ -4,7 +4,7 @@
  * @details 实现了 VideoPipeline 类。主要流程包括：初始化及启动硬件加速编码器（MppEncoder）、
  *          基于 V4L2 开启采集工作线程、将采集到的原始帧送入缓冲队列。在工作线程循环中：
  *          利用 RgaProcessor 进行图像像素格式转换（转换为 NV12 供编码器使用），
- *          利用 MppEncoder 执行 H.264 视频硬件编码，投递 NV12 图像到 DisplayRenderer 进行本地显示渲染，
+ *          利用 MppEncoder 执行 H.264 视频硬件编码，按配置投递 NV12 图像到 DisplayRenderer 进行本地显示渲染，
  *          最后通过 AvTransport 发送编码后的视频数据。
  */
 
@@ -68,8 +68,12 @@ bool VideoPipeline::start(std::string& error) {
         return false;
     }
     
-    // 4. 开启本地预览渲染器
-    renderer_.start();
+    // 4. 按配置开启本地预览渲染器；默认关闭以避免纯推流场景持有额外显示帧
+    if (config_.debug.enable_preview) {
+        renderer_.start();
+    } else {
+        VC_LOG_INFO("display", "desktop preview disabled by debug.enable_preview=false");
+    }
     return true;
 }
 
@@ -184,10 +188,8 @@ void VideoPipeline::worker_loop() {
         const std::string frame_rga_mode = processor_.last_mode();
         const bool frame_mpp_dma = encoder_.last_input_dma();
         
-        const bool dma_only_nv12 = nv12.has_single_plane_dma() && nv12.data.empty();
-
-        // C. 将 CPU 可见的 NV12 图像提交给本地视频渲染器；DMA-only 主路径跳过预览拷贝
-        if (!dma_only_nv12) {
+        // C. 按配置提交本地预览。DisplayRenderer 支持 CPU 可见帧和 DMA-BUF fd 输入。
+        if (config_.debug.enable_preview) {
             renderer_.submit(std::move(nv12));
         } else {
             nv12 = {};
