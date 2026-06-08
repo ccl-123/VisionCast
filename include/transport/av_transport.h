@@ -83,7 +83,7 @@ private:
     UdpSender audio_udp_;           ///< 音频 UDP 发送器，用于传输 RTP 封包后的音频数据
     RtpPacketizer video_rtp_;       ///< 视频 RTP 打包器，将 H.264/H.265 编码包切片并封装为 RTP 报文
     RtpPacketizer audio_rtp_;       ///< 音频 RTP 打包器，将音频数据打包为 RTP 报文
-    AudioEncoder audio_encoder_;     ///< 音频编码器（若需要对原始音频进行 AAC/OPUS 等格式的编码）
+    AudioEncoder audio_encoder_;     ///< RTP/WebRTC 共用的 Opus 音频编码器
     RtmpPusher rtmp_;               ///< RTMP 推流器组件，负责向 RTMP 服务器推送音视频流
     WebRtcPusher webrtc_;           ///< WebRTC 推流器组件，负责低延迟音视频互动流传输
     std::mutex mutex_;              ///< 互斥锁，保护传输状态的线程安全，避免并发冲突
@@ -91,4 +91,3 @@ private:
 };
 
 }  // namespace visioncast
-

@@ -19,6 +19,7 @@
 
 #include "common/config.h"
 #include "common/log.h"
+#include "media/audio_codec.h"
 #include "pipeline/av_pipeline.h"
 
 namespace visioncast {
@@ -166,7 +167,8 @@ bool PipelineManager::write_sdp_file(std::string& error) const {
 
     // 写入标准的 SDP 配置文本格式，用于单播/组播 RTP 串流
     // m=video 部分指定 RTP/AVP H264 荷载格式 (PT=96)
-    // m=audio 部分指定 PCMA G.711a 荷载格式 (PT=8)
+    // m=audio 部分指定 Opus 荷载格式 (PT=111, RTP 时钟 48 kHz)
+    const int opus_stereo = config_.audio.channels == 2 ? 1 : 0;
     out << "v=0\n"
         << "o=- 0 0 IN IP4 127.0.0.1\n"
         << "s=VisionCast RTP Stream\n"
@@ -176,8 +178,15 @@ bool PipelineManager::write_sdp_file(std::string& error) const {
         << "a=rtpmap:96 H264/90000\n"
         << "a=fmtp:96 packetization-mode=1;profile-level-id=42e01f\n"
         << "a=recvonly\n"
-        << "m=audio " << config_.stream.audio_port << " RTP/AVP 8\n"
-        << "a=rtpmap:8 PCMA/8000/1\n"
+        << "m=audio " << config_.stream.audio_port << " RTP/AVP "
+        << static_cast<int>(kOpusPayloadType) << "\n"
+        << "a=rtpmap:" << static_cast<int>(kOpusPayloadType) << " opus/"
+        << kOpusRtpClockRate << "/2\n"
+        << "a=fmtp:" << static_cast<int>(kOpusPayloadType)
+        << " minptime=10;maxaveragebitrate=" << kOpusDefaultBitrate
+        << ";stereo=" << opus_stereo
+        << ";sprop-stereo=" << opus_stereo
+        << ";useinbandfec=1\n"
         << "a=recvonly\n";
     return true;
 }

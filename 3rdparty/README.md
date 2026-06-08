@@ -1,6 +1,6 @@
 # VisionCast 第三方依赖说明
 
-`3rdparty/` 保存 VisionCast 交叉编译和目标板运行使用的第三方头文件及 aarch64 库文件。项目的 `CMakeLists.txt` 只从本目录选择 MPP、RGA、RTSP、FFmpeg、JPEG 和 ALSA 依赖，不再引用其他工程或 SDK 中的绝对路径。
+`3rdparty/` 保存 VisionCast 交叉编译和目标板运行使用的第三方头文件及 aarch64 库文件。项目的 `CMakeLists.txt` 从本目录选择 MPP、RGA、RTSP、FFmpeg、JPEG、WebRTC、Opus 和 ALSA 依赖。
 
 ## 目录结构
 
@@ -22,6 +22,9 @@
     ├── include/
     └── lib/aarch64/
 ├── webrtc/
+│   ├── include/
+│   └── lib/aarch64/
+├── opus/
 │   ├── include/
 │   └── lib/aarch64/
 └── alsa/
@@ -73,13 +76,13 @@
 主要文件：
 
 - `rtsp/include/rtsp_demo.h`：轻量 RTSP 服务端接口。
-- `rtsp/lib/aarch64/librtsp.a`：RTSP/RTP 服务端静态库，支持 H.264 和 G.711A，经 UDP 或 TCP 向客户端发送。
+- `rtsp/lib/aarch64/librtsp.a`：RTSP/RTP 服务端静态库，支持 H.264 和音频 RTP，经 UDP 或 TCP 向客户端发送。
 
 项目用途：
 
 - `src/transport/rtsp_server.cpp` 创建监听端口和会话路径。
 - 视频通过 `rtsp_tx_video()` 注入 MPP 产生的 H.264 Annex-B 帧。
-- 音频通过 `rtsp_tx_audio()` 注入 G.711 A-law 数据。
+- 音频通过 `rtsp_tx_audio()` 注入已编码数据。
 - 默认地址为 `rtsp://<板端IP>:8554/live`。
 
 构建开关：
@@ -132,7 +135,7 @@
 
 - `src/transport/webrtc_pusher.cpp` 创建 libdatachannel PeerConnection 和音视频 Track。
 - WHIP 信令通过 `webrtc_url` 发起 HTTP POST 交换 SDP answer。
-- 视频沿用项目 H.264 RTP packetizer，音频沿用 G.711 A-law RTP packetizer，再交给 WebRTC Track 通过 DTLS/SRTP 发送。
+- 视频沿用项目 H.264 RTP packetizer，音频使用共享 Opus encoder 和 RTP packetizer，再交给 WebRTC Track 通过 DTLS/SRTP 发送。
 
 构建行为：
 
@@ -144,6 +147,19 @@
 
 - 当前 WHIP helper 支持明文 `http://` URL，默认值为 `http://192.168.137.1:8889/live/stream`。
 - HTTPS WHIP 需要额外实现 TLS HTTP 客户端，不在当前版本范围内。
+
+## Opus
+
+主要文件：
+
+- `opus/include/opus.h`：Opus 编码 API。
+- `opus/lib/aarch64/libopus.so*`：aarch64 Opus 1.3.1 运行库。
+
+项目用途：
+
+- `src/media/audio_encoder.cpp` 将 ALSA S16_LE PCM 编码为 20ms Opus 帧。
+- RTP 与 WebRTC 共用 payload type `111` 和 48 kHz RTP 时钟。
+- CMake 找到头文件和库后定义 `VISIONCAST_ENABLE_OPUS=1`，安装阶段复制 `libopus.so*`。
 
 ## libjpeg-turbo
 
@@ -173,7 +189,7 @@
 项目用途：
 
 - `src/media/audio_capture.cpp` 使用 `snd_pcm_open()`、`snd_pcm_set_params()`、`snd_pcm_readi()` 等接口从 `hw:1,0` 采集 48 kHz、单声道、S16_LE PCM。
-- ALSA 采集结果进入 G.711A/RTP 音频链路，RTMP 模式则进一步编码为 AAC。
+- ALSA 采集结果在 RTP/WebRTC 模式编码为 Opus，RTMP 模式编码为 AAC。
 
 构建与运行行为：
 

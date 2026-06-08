@@ -70,7 +70,7 @@ is_system_runtime_lib() {
         ld-linux-aarch64.so.1|libc.so.6|libpthread.so.0|libdl.so.2|librt.so.1|libm.so.6|libresolv.so.2|libnsl.so.1|libutil.so.1)
             return 0
             ;;
-        libasound.so*|libjpeg.so*|libssl.so*|libcrypto.so*|librga.so*|librockchip_mpp.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libswresample.so*)
+        libasound.so*|libjpeg.so*|libssl.so*|libcrypto.so*|libopus.so*|librga.so*|librockchip_mpp.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libswresample.so*)
             return 0
             ;;
         *)

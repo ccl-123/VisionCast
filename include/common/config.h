@@ -34,6 +34,15 @@ VisionCastConfig default_config();
 bool load_config_file(const std::string& path, VisionCastConfig& config, std::string& error);
 
 /**
+ * @brief 校验最终配置，包含命令行覆盖后的协议相关约束。
+ *
+ * @param config 最终配置对象。
+ * @param error 输出参数，校验失败时填充详细原因。
+ * @return 配置可用返回 true，否则返回 false。
+ */
+bool validate_config(const VisionCastConfig& config, std::string& error);
+
+/**
  * @brief 序列化当前配置对象，输出包含各项核心参数的易读文本摘要。
  * 
  * 适用于程序启动时或配置变更时将当前配置打印到日志中，便于诊断。

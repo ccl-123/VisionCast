@@ -172,6 +172,11 @@ int main(int argc, char** argv) {
     visioncast::replace_all(config.stream.rtmp_url, "{server_ip}", config.stream.server_ip);
     visioncast::replace_all(config.stream.webrtc_url, "{server_ip}", config.stream.server_ip);
 
+    if (!visioncast::validate_config(config, error)) {
+        VC_LOG_ERROR("main", error);
+        return 1;
+    }
+
     VC_LOG_INFO("main", "loaded config: " + config_path);
     // 初始化流水线管理器，它将统一构建和控制采集、转换、编码以及网络推送
     visioncast::PipelineManager manager(config);

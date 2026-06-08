@@ -391,6 +391,26 @@ std::string bool_text(bool value) {
     return value ? "true" : "false";
 }
 
+bool is_rtp_opus_protocol(const std::string& protocol) {
+    return protocol == "rtp" || protocol == "webrtc";
+}
+
+bool is_supported_opus_sample_rate(int sample_rate) {
+    return sample_rate == 8000 ||
+           sample_rate == 12000 ||
+           sample_rate == 16000 ||
+           sample_rate == 24000 ||
+           sample_rate == 48000;
+}
+
+bool is_supported_opus_frame_ms(int frame_ms) {
+    return frame_ms == 5 ||
+           frame_ms == 10 ||
+           frame_ms == 20 ||
+           frame_ms == 40 ||
+           frame_ms == 60;
+}
+
 }  // namespace
 
 void replace_all(std::string& str, const std::string& from, const std::string& to) {
@@ -426,6 +446,31 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
     } catch (const std::exception& ex) {
         error = std::string("invalid config: ") + ex.what();
         return false;
+    }
+
+    return true;
+}
+
+bool validate_config(const VisionCastConfig& config, std::string& error) {
+    if (config.audio.channels != 1 && config.audio.channels != 2) {
+        error = "audio.channels must be 1 or 2";
+        return false;
+    }
+
+    if (config.audio.frame_ms <= 0) {
+        error = "audio.frame_ms must be positive";
+        return false;
+    }
+
+    if (is_rtp_opus_protocol(config.stream.protocol)) {
+        if (!is_supported_opus_sample_rate(config.audio.sample_rate)) {
+            error = "RTP/WebRTC Opus audio.sample_rate must be one of 8000, 12000, 16000, 24000, 48000";
+            return false;
+        }
+        if (!is_supported_opus_frame_ms(config.audio.frame_ms)) {
+            error = "RTP/WebRTC Opus audio.frame_ms must be one of 5, 10, 20, 40, 60";
+            return false;
+        }
     }
 
     return true;

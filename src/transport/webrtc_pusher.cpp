@@ -5,7 +5,7 @@
  * 本文件利用 libdatachannel C++ API (rtc/rtc.hpp)，实现了 WebRTC WHIP 推流客户端。
  * 流程包含：
  * 1. 本地网络 IP 绑定以进行 ICE 通信。
- * 2. 构造本地 SDP Offer，添加 H.264 视频轨道和 PCMA 音频轨道。
+ * 2. 构造本地 SDP Offer，添加 H.264 视频轨道和 Opus 音频轨道。
  * 3. 使用原生 Sockets 实现 HTTP POST 交换 SDP Offer/Answer，与 WHIP 服务端协商。
  * 4. 建立 DTLS 握手与 SRTP 加密信道，实现超低延迟的音视频传输。
  */
@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #include "common/log.h"
+#include "media/audio_codec.h"
 
 #if defined(VISIONCAST_ENABLE_WEBRTC)
 #include "rtc/rtc.hpp"
@@ -40,7 +41,6 @@ namespace {
 constexpr std::uint32_t kVideoSsrc = 0x56435631U;
 constexpr std::uint32_t kAudioSsrc = 0x56434131U;
 constexpr int kVideoPayloadType = 96;
-constexpr int kAudioPayloadType = 8;
 
 struct ParsedHttpUrl {
     std::string host;
@@ -356,7 +356,11 @@ bool WebRtcPusher::connect(std::string& error) {
         impl_->video_track = impl_->pc->addTrack(video);
 
         rtc::Description::Audio audio("audio", rtc::Description::Direction::SendOnly);
-        audio.addPCMACodec(kAudioPayloadType);
+        const std::string opus_profile =
+            audio_.channels == 2
+                ? "minptime=10;maxaveragebitrate=64000;stereo=1;sprop-stereo=1;useinbandfec=1"
+                : "minptime=10;maxaveragebitrate=64000;stereo=0;sprop-stereo=0;useinbandfec=1";
+        audio.addOpusCodec(kOpusPayloadType, opus_profile);
         audio.addSSRC(kAudioSsrc, "audio", "visioncast", "audio");
         impl_->audio_track = impl_->pc->addTrack(audio);
 

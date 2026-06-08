@@ -23,7 +23,7 @@ enum class MediaType {
 
 /**
  * @struct EncodedPacket
- * @brief 表示编码压缩后的媒体数据包（如 H.264/H.265 NAL 单元或 G.711 音频包）
+ * @brief 表示编码压缩后的媒体数据包（如 H.264/H.265 NAL 单元或 Opus 音频包）
  */
 struct EncodedPacket {
     MediaType media_type = MediaType::Video; // 媒体类型，默认视频

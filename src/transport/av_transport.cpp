@@ -5,7 +5,7 @@
  * 本文件实现了 AvTransport 类。它负责多路分发控制，包括以下逻辑：
  * 1. 解析系统流式协议配置（RTP/RTMP/WebRTC）。
  * 2. 调度 UDP 发送器、RTP 打包器、RTMP 推流器和 WebRTC 推流器的生命周期。
- * 3. 针对音频做必要的格式转换（例如在 RTP/WebRTC 协议下执行 PCMA 编码）。
+ * 3. RTP 和 WebRTC 共用 Opus 编码及 RTP 打包链路，RTMP 保持独立 AAC 编码。
  * 4. 使用 std::lock_guard 对各种操作进行同步保护，确保线程安全。
  */
 
@@ -21,7 +21,8 @@ AvTransport::AvTransport(VisionCastConfig config)
       audio_udp_(config_.stream.server_ip, config_.stream.audio_port),
       // 0x56435631U = "VCV1" (VisionCast Video 1), 0x56434131U = "VCA1" (VisionCast Audio 1) 作为 SSRC
       video_rtp_(96, 0x56435631U),
-      audio_rtp_(8, 0x56434131U), // 8 代表 PCMA (G.711a) 载荷类型
+      audio_rtp_(kOpusPayloadType, 0x56434131U),
+      audio_encoder_(config_.audio.frame_ms),
       rtmp_(config_.stream.rtmp_url, config_.video, config_.audio),
       webrtc_(config_.stream.webrtc_url, config_.video, config_.audio) {}
 
@@ -112,8 +113,14 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
             frame.pcm.data(), frame.pcm.size(), frame.pts_us, error);
     }
 
-    // 2. 对于 RTP 或 WebRTC 协议，需要先将原始 PCM 音频数据编码为 PCMA (G.711a) 格式
-    const EncodedPacket encoded = audio_encoder_.encode_pcma(frame);
+    // 2. RTP 和 WebRTC 共用 Opus 编码及 RTP 打包。
+    const EncodedPacket encoded = audio_encoder_.encode(frame, error);
+    if (!error.empty()) {
+        return false;
+    }
+    if (encoded.data.empty()) {
+        return true;
+    }
     
     // 2.1 RTP 协议分支：执行 RTP 打包并通过 UDP 音频套接字发送
     if (config_.stream.protocol == "rtp") {
@@ -125,7 +132,7 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
         return true;
     }
     
-    // 2.2 WebRTC 协议分支：发送 RTP 封装好的 PCMA 音频报文
+    // 2.2 WebRTC 协议分支：发送 RTP 封装好的 Opus 音频报文
     if (config_.stream.protocol == "webrtc") {
         return webrtc_.push_audio_rtp(audio_rtp_.packetize(encoded), error);
     }
@@ -135,4 +142,3 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
 }
 
 }  // namespace visioncast
-

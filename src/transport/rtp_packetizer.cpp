@@ -63,7 +63,7 @@ RtpPacketizer::RtpPacketizer(std::uint8_t payload_type, std::uint32_t ssrc, std:
     : payload_type_(payload_type), ssrc_(ssrc), mtu_(std::max<std::size_t>(mtu, 256)) {}
 
 std::vector<RtpPacket> RtpPacketizer::packetize(const EncodedPacket& packet) {
-    // 视频需要解析 NALU 并依据 MTU 分片打包；音频（例如 PCMA）通常较小，直接作为单包打包即可
+    // 视频需要解析 NALU 并依据 MTU 分片打包；Opus 音频帧直接作为单个 RTP 载荷发送。
     if (packet.media_type == MediaType::Video) {
         return packetize_h264(packet);
     }
@@ -172,4 +172,3 @@ RtpPacket RtpPacketizer::make_packet(const std::uint8_t* payload,
 }
 
 }  // namespace visioncast
-

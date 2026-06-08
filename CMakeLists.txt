@@ -32,6 +32,9 @@ set(ALSA_LIB_DIR "${THIRDPARTY_DIR}/alsa/lib/aarch64")
 set(WEBRTC_INC_DIR "${THIRDPARTY_DIR}/webrtc/include")
 set(WEBRTC_LIB_DIR "${THIRDPARTY_DIR}/webrtc/lib/aarch64")
 set(DATACHANNEL_LIB "${WEBRTC_LIB_DIR}/libdatachannel.so")
+set(OPUS_INC_DIR "${THIRDPARTY_DIR}/opus/include")
+set(OPUS_LIB_DIR "${THIRDPARTY_DIR}/opus/lib/aarch64")
+set(OPUS_LIB "${OPUS_LIB_DIR}/libopus.so")
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" VISIONCAST_SYSTEM_PROCESSOR)
 if (VISIONCAST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     set(VISIONCAST_TARGET_RK3588 ON)
@@ -125,6 +128,24 @@ else()
     message(WARNING "libdatachannel WebRTC files were not found; WHIP mode will be disabled")
 endif()
 
+if (VISIONCAST_TARGET_RK3588
+    AND EXISTS "${OPUS_INC_DIR}/opus.h"
+    AND EXISTS "${OPUS_LIB}")
+    target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_OPUS=1)
+    target_include_directories(visioncast SYSTEM PRIVATE ${OPUS_INC_DIR})
+    target_link_libraries(visioncast PRIVATE ${OPUS_LIB})
+else()
+    find_path(OPUS_SYSTEM_INC_DIR opus.h PATH_SUFFIXES opus)
+    find_library(OPUS_SYSTEM_LIB opus)
+    if (OPUS_SYSTEM_INC_DIR AND OPUS_SYSTEM_LIB)
+        target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_OPUS=1)
+        target_include_directories(visioncast SYSTEM PRIVATE ${OPUS_SYSTEM_INC_DIR})
+        target_link_libraries(visioncast PRIVATE ${OPUS_SYSTEM_LIB})
+    else()
+        message(FATAL_ERROR "Opus headers/library are required because RTP/WebRTC audio is Opus-only")
+    endif()
+endif()
+
 install(TARGETS visioncast RUNTIME DESTINATION bin)
 install(DIRECTORY config/ DESTINATION config)
 install(DIRECTORY scripts/run scripts/board DESTINATION scripts
@@ -139,3 +160,14 @@ if (EXISTS "${WEBRTC_LIB_DIR}")
     )
 endif()
 
+if (EXISTS "${OPUS_LIB_DIR}")
+    install(DIRECTORY "${OPUS_LIB_DIR}/"
+        DESTINATION lib
+        FILES_MATCHING PATTERN "libopus.so*"
+    )
+    install(FILES
+        "${THIRDPARTY_DIR}/opus/COPYING"
+        "${THIRDPARTY_DIR}/opus/README.md"
+        DESTINATION share/licenses/opus
+    )
+endif()

@@ -63,8 +63,8 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 - **混音降采样**：由于 ALSA 硬件层在某些驱动配置下拒绝直接开启单声道 (Mono) 采集，`AudioCapture` 在启动时自动开启双声道 (Stereo) 采集，并在 PCM 帧读取出队后，进行 **左右声道均值混音**，平滑合并为一路单声道 PCM 帧。
 - **采集时钟**：在 ALSA PCM 读取完成的瞬间打上 `CLOCK_MONOTONIC` 微秒级单调时钟 PTS。
 - **编码器实现**：
-  - **G.711A (PCMA)**：在 `AudioEncoder` 中实现，压缩比 2:1，计算量极小，直接打包进 RTP。
-  - **AAC 编码**：提供 AAC 格式硬编码/软编码支持，提高兼容性。
+  - **Opus 编码**：RTP 与 WebRTC 共用 `AudioEncoder`，使用 20ms 帧、48 kHz RTP 时钟和带内 FEC。
+  - **AAC 编码**：RTMP 使用 FFmpeg AAC 编码器并封装为 FLV。
 
 ```text
 [Main Mic / Headset Mic]
@@ -79,10 +79,9 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 [AudioCapture] (左右声道均值混音 -> 单声道 PCM)
      │ (打 CLOCK_MONOTONIC PTS)
      ▼
-[AudioEncoder] (PCMA 编码 / AAC 编码)
-     │
-     ▼
-[AvTransport] (封装 RTP / RTMP / WebRTC)
+[AvTransport]
+     ├─ RTP/WebRTC -> [AudioEncoder] Opus -> RTP/SRTP
+     └─ RTMP       -> [RtmpPusher] AAC -> FLV
 ```
 
 ---
@@ -95,7 +94,7 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 | 声道数 | `1` (双声道采集，应用层降采样单声道输出) |
 | 采样格式 | `S16_LE` |
 | 帧周期 | `20 ms` |
-| 实现编码 | G.711A (PCMA) / AAC |
+| 实现编码 | RTP/WebRTC: Opus；RTMP: AAC |
 | 默认设备 | `hw:1,0` |
 
 ---
