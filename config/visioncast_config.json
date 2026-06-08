@@ -1,24 +1,39 @@
 {
   "//comment_1": "首选使用 webrtc 协议进行低延迟推流，其次支持 rtmp 和 rtp 协议。可在 protocol 中配置。",
   "//comment_2": "WebRTC 使用 webrtc_url，RTMP 使用 rtmp_url，RTP 使用 server_ip/video_port/audio_port。",
-  "video": {
-    "source": "mipi_13855",
-    "fallback_source": "usb_c270",
-    "device": "/dev/video11",
-    "fallback_device": "/dev/video21",
-    "fallback_format": "MJPEG",
-    "width": 1920,
-    "height": 1080,
-    "fps": 30,
-    "format": "NV12",
-    "sensor_subdev": "/dev/v4l-subdev2",
-    "crop_left": 0,
-    "crop_top": 380,
-    "crop_width": 4224,
-    "crop_height": 2376,
-    "sensor_exposure": 1928,
-    "sensor_vblank": 78,
-    "sensor_analogue_gain": 1536
+  "//comment_3": "运行脚本固定选择 video_profiles 中的摄像头：run_13855_camera.sh 使用 mipi_13855，run_usb_camera.sh 使用 usb_c270。",
+  "video_profile": "mipi_13855",
+  "video_profiles": {
+    "mipi_13855": {
+      "source": "mipi_13855",
+      "fallback_source": "usb_c270",
+      "device": "/dev/video11",
+      "fallback_device": "/dev/video21",
+      "fallback_format": "MJPEG",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "format": "NV12",
+      "sensor_subdev": "/dev/v4l-subdev2",
+      "crop_left": 0,
+      "crop_top": 380,
+      "crop_width": 4224,
+      "crop_height": 2376,
+      "sensor_exposure": 1928,
+      "sensor_vblank": 78,
+      "sensor_analogue_gain": 1536
+    },
+    "usb_c270": {
+      "source": "usb_c270",
+      "fallback_source": "",
+      "device": "/dev/video21",
+      "fallback_device": "",
+      "fallback_format": "",
+      "width": 1280,
+      "height": 720,
+      "fps": 30,
+      "format": "MJPEG"
+    }
   },
   "audio": {
     "device": "hw:1,0",

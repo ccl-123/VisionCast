@@ -46,14 +46,14 @@ export LD_LIBRARY_PATH=/home/elf/open_project/VisionCast/install/visioncast/lib
 WebRTC 依赖于 WHIP（推送）和 WHEP（拉取/播放）协议，经过 DTLS/SRTP 进行加密传输。
 
 #### 2.1.1 推流测试命令
-进入 VisionCast 根目录，运行 webrtc 协议推流：
-- **本机环回推流**（目标为 `127.0.0.1`）：
+进入 VisionCast 根目录，摄像头由运行脚本决定，脚本后的第一个参数选择协议：
+- **13855 摄像头 WebRTC 推流**：
   ```bash
-  env LD_LIBRARY_PATH=./install/visioncast/lib ./install/visioncast/bin/visioncast --protocol webrtc --webrtc-url http://127.0.0.1:8891/live/stream/whip
+  ./install/visioncast/scripts/run/run_13855_camera.sh webrtc
   ```
-- **跨设备推流**（例如，如果服务器部署在开发板 `192.168.137.202` 上，客户端从外端推送）：
+- **USB C270 摄像头 WebRTC 推流**：
   ```bash
-  env LD_LIBRARY_PATH=./install/visioncast/lib ./install/visioncast/bin/visioncast --protocol webrtc --webrtc-url http://192.168.137.202:8891/live/stream/whip
+  ./install/visioncast/scripts/run/run_usb_camera.sh webrtc
   ```
 
 #### 2.1.2 浏览器拉流播放
@@ -75,18 +75,18 @@ MediaMTX 提供内置的 WebRTC 网页播放器。
 RTMP 具有广泛的传统播放器兼容性，通过 TCP 建立稳定的推流管道。
 
 #### 2.2.1 推流测试命令
-- **推流到本地服务器**：
+- **13855 摄像头推流到默认 RTMP 地址**：
   ```bash
-  env LD_LIBRARY_PATH=./install/visioncast/lib ./install/visioncast/bin/visioncast --protocol rtmp --rtmp-url rtmp://127.0.0.1:1936/live/stream
+  ./install/visioncast/scripts/run/run_13855_camera.sh rtmp
   ```
-- **推流到远端服务器**（例如 `192.168.137.1`）：
+- **USB C270 摄像头推流到默认 RTMP 地址**：
   ```bash
-  env LD_LIBRARY_PATH=./install/visioncast/lib ./install/visioncast/bin/visioncast --protocol rtmp --rtmp-url rtmp://192.168.137.1:1936/live/stream
+  ./install/visioncast/scripts/run/run_usb_camera.sh rtmp
   ```
 
 #### 2.2.2 播放拉流命令
 使用 `VLC`、`ffplay` 或 `mpv` 等播放器进行拉流测试。
-- 默认配置为 H.264 RTMP；若切换到 H.265，播放端和服务端需要支持 Enhanced RTMP/HEVC。
+- 默认配置为 H.264 RTMP；若在 `config/visioncast_config.json` 中将 `encoder.video_codec` 切换到 `h265`，播放端和服务端需要支持 Enhanced RTMP/HEVC。
 - **使用 ffplay 拉流播放**：
   ```bash
   ffplay rtmp://192.168.137.202:1936/live/stream

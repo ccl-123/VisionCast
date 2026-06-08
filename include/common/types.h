@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -89,6 +90,7 @@ struct DebugConfig {
  */
 struct VisionCastConfig {
     VideoConfig video;                          ///< 视频配置子集
+    std::map<std::string, VideoConfig> video_profiles; ///< 可选摄像头配置档，由运行脚本按摄像头类型选择
     AudioConfig audio;                          ///< 音频配置子集
     EncoderConfig encoder;                      ///< 编码配置子集
     StreamConfig stream;                        ///< 传输流配置子集

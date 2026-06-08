@@ -153,7 +153,16 @@ else()
 endif()
 
 install(TARGETS visioncast RUNTIME DESTINATION bin)
-install(DIRECTORY config/ DESTINATION config)
+install(CODE [[
+    file(GLOB visioncast_legacy_configs "${CMAKE_INSTALL_PREFIX}/config/*.json")
+    foreach(config_file IN LISTS visioncast_legacy_configs)
+        get_filename_component(config_name "${config_file}" NAME)
+        if (NOT config_name STREQUAL "visioncast_config.json")
+            file(REMOVE "${config_file}")
+        endif()
+    endforeach()
+]])
+install(FILES config/visioncast_config.json DESTINATION config)
 install(DIRECTORY scripts/run scripts/board DESTINATION scripts
     USE_SOURCE_PERMISSIONS
 )

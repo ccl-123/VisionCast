@@ -1,9 +1,0 @@
-{
-  "encoder": {
-    "video_codec": "h264",
-    "bitrate": 4000000,
-    "gop": 30,
-    "low_latency": true,
-    "b_frames": 0
-  }
-}

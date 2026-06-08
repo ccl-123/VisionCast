@@ -9,6 +9,7 @@
  * 4. 运行硬件设备探测（--probe）或启动音视频流水线引擎（PipelineManager::run_stream）。
  */
 
+#include <cstdlib>
 #include <iostream>
 #include <exception>
 #include <optional>
@@ -157,6 +158,14 @@ int main(int argc, char** argv) {
     if (!visioncast::load_config_file(config_path, config, error)) {
         VC_LOG_ERROR("main", error);
         return 1;
+    }
+
+    if (const char* camera_profile = std::getenv("VISIONCAST_CAMERA_PROFILE")) {
+        if (camera_profile[0] != '\0' &&
+            !visioncast::select_video_profile(config, camera_profile, error)) {
+            VC_LOG_ERROR("main", error);
+            return 1;
+        }
     }
 
     // 应用命令行传入的参数，覆盖配置文件中的对应值

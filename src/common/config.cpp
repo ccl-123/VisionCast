@@ -11,9 +11,11 @@
 
 #include <cctype>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace visioncast {
 namespace {
@@ -341,6 +343,17 @@ std::string normalize_video_codec(std::string value) {
     return value;
 }
 
+std::string normalize_video_profile_name(std::string value) {
+    value = lower_ascii(value);
+    if (value == "13855" || value == "mipi" || value == "mipi13855") {
+        return "mipi_13855";
+    }
+    if (value == "usb" || value == "c270" || value == "usb-c270") {
+        return "usb_c270";
+    }
+    return value;
+}
+
 /**
  * @brief 将 JSON 对象的字段填充到 VideoConfig 视频配置结构体中。
  */
@@ -364,6 +377,35 @@ void apply_video_config(const std::string& object, VideoConfig& video) {
     if (auto value = int_value(object, "sensor_analogue_gain")) {
         video.sensor_analogue_gain = *value;
     }
+}
+
+void apply_video_profiles(const std::string& object,
+                          std::map<std::string, VideoConfig>& profiles) {
+    static constexpr const char* kProfileNames[] = {
+        "mipi_13855",
+        "usb_c270",
+    };
+
+    for (const char* name : kProfileNames) {
+        if (auto profile_object = find_object(object, name)) {
+            VideoConfig profile;
+            apply_video_config(*profile_object, profile);
+            profiles.emplace(name, std::move(profile));
+        }
+    }
+}
+
+bool apply_video_profile(VisionCastConfig& config,
+                         const std::string& profile,
+                         std::string& error) {
+    const std::string name = normalize_video_profile_name(profile);
+    auto it = config.video_profiles.find(name);
+    if (it == config.video_profiles.end()) {
+        error = "unknown camera profile: " + profile + " (expected mipi_13855 or usb_c270)";
+        return false;
+    }
+    config.video = it->second;
+    return true;
 }
 
 /**
@@ -470,8 +512,16 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
     }
 
     try {
-        // 依次解析顶层 key：video, audio, encoder, stream, debug 并填充到配置中
+        // 依次解析顶层 key：video_profiles, video, audio, encoder, stream, debug 并填充到配置中
+        if (auto object = find_object(document, "video_profiles")) {
+            apply_video_profiles(*object, config.video_profiles);
+        }
         if (auto object = find_object(document, "video")) apply_video_config(*object, config.video);
+        if (auto value = string_value(document, "video_profile")) {
+            if (!apply_video_profile(config, *value, error)) {
+                return false;
+            }
+        }
         if (auto object = find_object(document, "audio")) apply_audio_config(*object, config.audio);
         if (auto object = find_object(document, "encoder")) apply_encoder_config(*object, config.encoder);
         if (auto object = find_object(document, "stream")) apply_stream_config(*object, config.stream);
@@ -482,6 +532,12 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
     }
 
     return true;
+}
+
+bool select_video_profile(VisionCastConfig& config,
+                          const std::string& profile,
+                          std::string& error) {
+    return apply_video_profile(config, profile, error);
 }
 
 bool validate_config(const VisionCastConfig& config, std::string& error) {

@@ -9,6 +9,7 @@ if [[ ! -x "${INSTALL_DIR}/bin/visioncast" &&
 fi
 BIN="${INSTALL_DIR}/bin/visioncast"
 CONFIG="${INSTALL_DIR}/config/visioncast_config.json"
+export VISIONCAST_CAMERA_PROFILE="mipi_13855"
 
 if [[ ! -x "${BIN}" ]]; then
     echo "visioncast executable not found: ${BIN}"

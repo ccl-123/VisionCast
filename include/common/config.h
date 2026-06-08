@@ -34,6 +34,18 @@ VisionCastConfig default_config();
 bool load_config_file(const std::string& path, VisionCastConfig& config, std::string& error);
 
 /**
+ * @brief 从已加载的主配置中选择摄像头配置档。
+ *
+ * @param config 已加载的全局配置，成功后会用所选 profile 覆盖 config.video。
+ * @param profile 摄像头配置档名称，支持 mipi_13855/13855 和 usb_c270/usb/c270。
+ * @param error 失败时写入原因。
+ * @return 选择成功返回 true，否则返回 false。
+ */
+bool select_video_profile(VisionCastConfig& config,
+                          const std::string& profile,
+                          std::string& error);
+
+/**
  * @brief 校验最终配置，包含命令行覆盖后的协议相关约束。
  *
  * @param config 最终配置对象。
