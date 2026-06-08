@@ -101,7 +101,7 @@ MJPEG 解码的输入、输出、fallback 和性能日志字段见 [mjpeg_decode
 ## 6. 视频硬件编码设计 (MPP)
 
 视频硬编码基于 Rockchip MPP API：
-- **编码格式**：由 `encoder.video_codec` 选择 `h264` 或 `h265`。默认配置保持 H.264；`config/visioncast_config_h265.json` 提供完整 H.265 运行配置，`encoder_h265_low_latency.json` 仅作为编码器片段示例。
+- **编码格式**：由 `encoder.video_codec` 选择 `h264` 或 `h265`。默认配置保持 H.264；H.265 低延迟配置可用于带宽优化。
 - **码率控制**：固定码率 (CBR) 控制，默认配置为 4Mbps，码率波动范围稳定。
 - **GOP 大小**：固定设为 30。
 - **低延迟优化**：启用 MPP 内部低延迟模式，视频帧随到随编，即刻输出，编码耗时稳定在 `2.1 ~ 6.3 ms`。
@@ -215,8 +215,7 @@ VisionCast/
 ├── .gitignore                          # Git 忽略文件配置
 │
 ├── config/                             # 静态 JSON 配置文件
-│   ├── visioncast_config.json          # 主程序总控配置，默认 H.264
-│   ├── visioncast_config_h265.json     # H.265 完整运行配置
+│   ├── visioncast_config.json          # 主程序总控配置
 │   ├── video_13855.json                # 13855 MIPI 摄像头采集参数
 │   ├── video_usb_c270.json             # USB C270 采集与备用参数
 │   └── audio_main_mic.json             # 主麦克风采集配置
