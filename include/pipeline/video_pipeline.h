@@ -2,7 +2,7 @@
  * @file video_pipeline.h
  * @brief VisionCast 视频流水线处理模块
  * @details 负责视频数据的采集（V4L2 驱动）、图像格式转换与缩放裁剪（Rockchip RGA 硬件加速）、
- *          视频编码（Rockchip MPP H.264 硬件编码）、本地显示渲染（DRM/KMS/X11等渲染器）以及网络发送。
+ *          视频编码（Rockchip MPP H.264/H.265 硬件编码）、本地显示渲染（DRM/KMS/X11等渲染器）以及网络发送。
  */
 
 #pragma once
@@ -78,7 +78,7 @@ private:
     VisionCastConfig config_;                        ///< 全局系统配置，包含分辨率、码率、帧率等
     VideoCapture capture_;                           ///< 视频采集模块，基于 V4L2 接口实现
     RgaProcessor processor_;                         ///< Rockchip RGA 图形加速处理器，用于格式转换与缩放
-    MppEncoder encoder_;                             ///< Rockchip MPP 硬件编码器，执行 H.264 等格式编码
+    MppEncoder encoder_;                             ///< Rockchip MPP 硬件编码器，执行 H.264/H.265 编码
     std::shared_ptr<AvTransport> transport_;          ///< 传输模块接口，用于编码后视频数据的网络推送
     DisplayRenderer renderer_;                       ///< 本地视频渲染显示器
     BoundedBlockingQueue<VideoFrame> raw_queue_{2};  ///< 存储原始捕获视频帧的阻塞队列，大小限制为 2

@@ -6,7 +6,7 @@
 
 ## 1. 链路总览
 
-USB C270 输出的是压缩 MJPEG，不是可直接送 H.264 编码器的 NV12。当前实际路径为：
+USB C270 输出的是压缩 MJPEG，不是可直接送视频编码器的 NV12。当前实际路径为：
 
 ```text
 V4L2 DQBUF bytesused JPEG
@@ -14,7 +14,7 @@ V4L2 DQBUF bytesused JPEG
   -> MPP MJPEG 解码输入 buffer
   -> MPP 解码输出 NV12 DRM buffer / DMA-BUF fd
   -> RGA 直通或 fd-to-fd resize
-  -> MPP H.264 编码 EXT_DMA 输入
+  -> MPP H.264/H.265 编码 EXT_DMA 输入
   -> RTP / RTMP / WebRTC 封包发送
 ```
 
@@ -54,7 +54,7 @@ MPP decoded NV12 fd -> MPP encoder EXT_DMA
 MPP decoded NV12 fd -> RGA output DRM fd -> MPP encoder EXT_DMA
 ```
 
-主路径不会把解码后的整帧 NV12 拷贝到 `std::vector`。仍然存在的拷贝包括：压缩 JPEG payload 写入 MPP 输入 buffer、编码后 H.264 拷贝到 `EncodedPacket::data`、协议封包拷贝。
+主路径不会把解码后的整帧 NV12 拷贝到 `std::vector`。仍然存在的拷贝包括：压缩 JPEG payload 写入 MPP 输入 buffer、编码后视频包拷贝到 `EncodedPacket::data`、协议封包拷贝。
 
 ## 5. 性能日志字段
 

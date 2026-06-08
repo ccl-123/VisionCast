@@ -26,7 +26,7 @@ namespace visioncast {
  */
 class WebRtcPusher {
 public:
-    WebRtcPusher(std::string whip_url, VideoConfig video, AudioConfig audio);
+    WebRtcPusher(std::string whip_url, VideoConfig video, AudioConfig audio, EncoderConfig encoder);
     ~WebRtcPusher();
 
     // 禁用拷贝构造和赋值操作
@@ -74,6 +74,7 @@ private:
     std::string whip_url_;            ///< WebRTC WHIP 的服务端 URL
     VideoConfig video_;               ///< 视频格式与编码属性配置
     AudioConfig audio_;               ///< 音频格式与编码属性配置
+    EncoderConfig encoder_;           ///< 编码器配置，用于声明 H.264/H.265 SDP codec
 };
 
 }  // namespace visioncast

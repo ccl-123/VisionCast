@@ -2,7 +2,7 @@
  * @file mpp_encoder.cpp
  * @brief VisionCast MPP 视频硬编码实现文件
  * @details 基于瑞芯微 MPP (Media Process Platform) 框架，实现了将 NV12 (YUV420sp)
- *          原始像素视频帧通过硬件 H.264 编码器压缩为 H.264 (AVC) Annex-B 码流。
+ *          原始像素视频帧通过硬件编码器压缩为 H.264/H.265 Annex-B 码流。
  *          支持 CBR 码率控制、GOP 配置、SPS/PPS 头部自动插入，并实现了 NALU 帧类型解析（探测 I 帧/关键帧）。
  */
 
@@ -62,6 +62,14 @@ bool set_s32(MppEncCfg cfg, const char* key, int value, std::string& error) {
     return true;
 }
 
+bool encoder_is_h265(const EncoderConfig& encoder) {
+    return encoder.video_codec == "h265";
+}
+
+const char* video_codec_name(bool h265) {
+    return h265 ? "H265" : "H264";
+}
+
 // 辅助函数：扫描 H.264 码流数据包，检测是否存在指定类型的 NAL 单元（如 expected_type=5 表示 IDR/I帧）。
 // 支持匹配 3 字节 (00 00 01) 与 4 字节 (00 00 00 01) 的 Annex-B 起始码前缀。
 bool contains_h264_nalu_type(const std::uint8_t* data,
@@ -77,6 +85,27 @@ bool contains_h264_nalu_type(const std::uint8_t* data,
         }
         if (prefix != 0 && i + prefix < size &&
             (data[i + prefix] & 0x1FU) == expected_type) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool contains_h265_irap_nalu(const std::uint8_t* data, std::size_t size) {
+    for (std::size_t i = 0; i + 5 < size; ++i) {
+        std::size_t prefix = 0;
+        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1) {
+            prefix = 3;
+        } else if (i + 4 < size && data[i] == 0 && data[i + 1] == 0 &&
+                   data[i + 2] == 0 && data[i + 3] == 1) {
+            prefix = 4;
+        }
+        if (prefix == 0 || i + prefix + 1 >= size) {
+            continue;
+        }
+        const std::uint8_t type =
+            static_cast<std::uint8_t>((data[i + prefix] >> 1) & 0x3FU);
+        if (type == 19 || type == 20 || type == 21) {
             return true;
         }
     }
@@ -120,10 +149,19 @@ bool MppEncoder::open(std::string& error) {
         return false;
     }
 
-    // 2. 初始化为 H.264 (AVC) 视频硬编码器
-    ret = mpp_init(impl_->ctx, MPP_CTX_ENC, MPP_VIDEO_CodingAVC);
+    const bool h265 = encoder_is_h265(encoder_);
+    const MppCodingType coding = h265 ? MPP_VIDEO_CodingHEVC : MPP_VIDEO_CodingAVC;
+    ret = mpp_check_support_format(MPP_CTX_ENC, coding);
     if (ret != MPP_OK) {
-        error = mpp_error("mpp_init(H264 encoder)", ret);
+        error = std::string("MPP encoder does not support ") + video_codec_name(h265);
+        close();
+        return false;
+    }
+
+    // 2. 初始化为 H.264 (AVC) 或 H.265 (HEVC) 视频硬编码器
+    ret = mpp_init(impl_->ctx, MPP_CTX_ENC, coding);
+    if (ret != MPP_OK) {
+        error = mpp_error(h265 ? "mpp_init(H265 encoder)" : "mpp_init(H264 encoder)", ret);
         close();
         return false;
     }
@@ -163,10 +201,18 @@ bool MppEncoder::open(std::string& error) {
         !set_s32(impl_->cfg, "rc:fps_out_flex", 0, error) ||
         !set_s32(impl_->cfg, "rc:fps_out_num", fps, error) ||
         !set_s32(impl_->cfg, "rc:fps_out_denorm", 1, error) ||
-        !set_s32(impl_->cfg, "rc:gop", gop, error) ||
-        !set_s32(impl_->cfg, "h264:stream_type", 0, error) ||
-        !set_s32(impl_->cfg, "h264:profile", 66, error) ||
-        !set_s32(impl_->cfg, "h264:level", 31, error)) {
+        !set_s32(impl_->cfg, "rc:gop", gop, error)) {
+        close();
+        return false;
+    }
+    if (!h265 &&
+        (!set_s32(impl_->cfg, "h264:stream_type", 0, error) ||
+         !set_s32(impl_->cfg, "h264:profile", 66, error) ||
+         !set_s32(impl_->cfg, "h264:level", 31, error))) {
+        close();
+        return false;
+    }
+    if (h265 && !set_s32(impl_->cfg, "h265:profile", 1, error)) {
         close();
         return false;
     }
@@ -245,7 +291,7 @@ bool MppEncoder::last_input_dma() const {
     return impl_->last_input_dma;
 }
 
-// 编码单帧 NV12 为 H.264 Packet
+// 编码单帧 NV12 为 H.264/H.265 Packet
 bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::string& error) {
 #if defined(VISIONCAST_ENABLE_MPP)
     impl_->last_input_dma = false;
@@ -328,7 +374,7 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
     mpp_frame_set_pts(mpp_frame, static_cast<RK_S64>(frame.pts_us));
     mpp_frame_set_buffer(mpp_frame, buffer);
 
-    // 3. 为输出的 H.264 码流包预先分配物理内存
+    // 3. 为输出的视频码流包预先分配物理内存
     const std::size_t packet_capacity =
         std::max<std::size_t>(input_size, static_cast<std::size_t>(encoder_.bitrate / 8));
     if (impl_->packet_buffer == nullptr ||
@@ -367,7 +413,7 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         return false;
     }
 
-    // 5. 从硬编码器获取编码完成的 H.264 码流包
+    // 5. 从硬编码器获取编码完成的视频码流包
     MppPacket out = nullptr;
     ret = impl_->mpi->encode_get_packet(impl_->ctx, &out);
     if (ret != MPP_OK) {
@@ -382,16 +428,18 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         mpp_packet_deinit(&output_packet);
         packet = {};
         packet.media_type = MediaType::Video;
+        packet.video_codec = encoder_is_h265(encoder_) ? VideoCodec::H265 : VideoCodec::H264;
         packet.pts_us = frame.pts_us;
         packet.rtp_timestamp = MediaClock::video_rtp_timestamp(frame.pts_us);
         return true;
     }
 
-    // 6. 解析数据包，检测 H.264 NALU 类型是否包含关键帧 (IDR = 5)
+    // 6. 解析数据包，检测 H.264/H.265 NALU 类型是否包含关键帧
     const auto* pos = static_cast<const std::uint8_t*>(mpp_packet_get_pos(out));
     const std::size_t length = mpp_packet_get_length(out);
     packet = {};
     packet.media_type = MediaType::Video;
+    packet.video_codec = encoder_is_h265(encoder_) ? VideoCodec::H265 : VideoCodec::H264;
     packet.pts_us = frame.pts_us;
     packet.rtp_timestamp = MediaClock::video_rtp_timestamp(frame.pts_us);
     if (pos == nullptr || length == 0) {
@@ -403,7 +451,9 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         mpp_buffer_put(buffer);
         return true;
     }
-    packet.key_frame = contains_h264_nalu_type(pos, length, 5);
+    packet.key_frame = packet.video_codec == VideoCodec::H265
+                           ? contains_h265_irap_nalu(pos, length)
+                           : contains_h264_nalu_type(pos, length, 5);
     packet.data.assign(pos, pos + length);
 
     // 7. 资源回收

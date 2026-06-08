@@ -5,7 +5,7 @@
  * 本文件利用 libdatachannel C++ API (rtc/rtc.hpp)，实现了 WebRTC WHIP 推流客户端。
  * 流程包含：
  * 1. 本地网络 IP 绑定以进行 ICE 通信。
- * 2. 构造本地 SDP Offer，添加 H.264 视频轨道和 Opus 音频轨道。
+ * 2. 构造本地 SDP Offer，添加 H.264/H.265 视频轨道和 Opus 音频轨道。
  * 3. 使用原生 Sockets 实现 HTTP POST 交换 SDP Offer/Answer，与 WHIP 服务端协商。
  * 4. 建立 DTLS 握手与 SRTP 加密信道，实现超低延迟的音视频传输。
  */
@@ -264,6 +264,10 @@ std::string pc_state_text(rtc::PeerConnection::State state) {
 }
 #endif
 
+bool use_h265(const EncoderConfig& encoder) {
+    return encoder.video_codec == "h265";
+}
+
 }  // namespace
 
 struct WebRtcPusher::Impl {
@@ -282,11 +286,15 @@ struct WebRtcPusher::Impl {
     bool opened = false;
 };
 
-WebRtcPusher::WebRtcPusher(std::string whip_url, VideoConfig video, AudioConfig audio)
+WebRtcPusher::WebRtcPusher(std::string whip_url,
+                           VideoConfig video,
+                           AudioConfig audio,
+                           EncoderConfig encoder)
     : impl_(std::make_unique<Impl>()),
       whip_url_(std::move(whip_url)),
       video_(std::move(video)),
-      audio_(std::move(audio)) {}
+      audio_(std::move(audio)),
+      encoder_(std::move(encoder)) {}
 
 WebRtcPusher::~WebRtcPusher() {
     disconnect();
@@ -351,7 +359,11 @@ bool WebRtcPusher::connect(std::string& error) {
         });
 
         rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
-        video.addH264Codec(kVideoPayloadType);
+        if (use_h265(encoder_)) {
+            video.addH265Codec(kVideoPayloadType, "profile-id=1");
+        } else {
+            video.addH264Codec(kVideoPayloadType);
+        }
         video.addSSRC(kVideoSsrc, "video", "visioncast", "video");
         impl_->video_track = impl_->pc->addTrack(video);
 

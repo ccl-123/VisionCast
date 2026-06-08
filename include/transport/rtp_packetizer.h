@@ -2,7 +2,7 @@
  * @file rtp_packetizer.h
  * @brief VisionCast RTP 协议打包器类头文件
  * 
- * 本文件实现了解析 H.264 等格式视频帧并将其进行 RTP（RFC 3550 / RFC 6184）封包的打包器。
+ * 本文件实现了解析 H.264/H.265 视频帧并将其进行 RTP（RFC 3550 / RFC 6184 / RFC 7798）封包的打包器。
  * 支持在超出 MTU 限制时自动执行分片（FU-A 封包），并处理 RTP 头部（含序列号、时间戳和 SSRC 等）。
  */
 
@@ -43,6 +43,7 @@ public:
 
 private:
     bool packetize_h264_each(const EncodedPacket& packet, const PacketHandler& handler);
+    bool packetize_h265_each(const EncodedPacket& packet, const PacketHandler& handler);
 
     void make_packet_into(RtpPacket& packet,
                           const std::uint8_t* payload,
@@ -59,6 +60,14 @@ private:
                               std::size_t fragment_size,
                               std::uint32_t timestamp,
                               bool marker);
+
+    void make_h265_fu_packet_into(RtpPacket& packet,
+                                  const std::uint8_t* fu_indicator,
+                                  std::uint8_t fu_header,
+                                  const std::uint8_t* fragment,
+                                  std::size_t fragment_size,
+                                  std::uint32_t timestamp,
+                                  bool marker);
 
     std::uint8_t payload_type_ = 96;  ///< RTP 载荷类型
     std::uint32_t ssrc_ = 0;           ///< 同步源标识符 (SSRC)

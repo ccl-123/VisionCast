@@ -38,6 +38,10 @@ std::string yes_no(bool value) {
     return value ? "yes" : "no";
 }
 
+bool use_h265(const VisionCastConfig& config) {
+    return config.encoder.video_codec == "h265";
+}
+
 // 辅助函数：打印 V4L2 视频设备的详细探测结果
 void print_video_result(const std::string& label, const VideoProbeResult& result) {
     std::cout << label << " video device: " << result.device << '\n';
@@ -166,18 +170,23 @@ bool PipelineManager::write_sdp_file(std::string& error) const {
     }
 
     // 写入标准的 SDP 配置文本格式，用于单播/组播 RTP 串流
-    // m=video 部分指定 RTP/AVP H264 荷载格式 (PT=96)
+    // m=video 部分根据 encoder.video_codec 指定 H.264/H.265 荷载格式 (PT=96)
     // m=audio 部分指定 Opus 荷载格式 (PT=111, RTP 时钟 48 kHz)
     const int opus_stereo = config_.audio.channels == 2 ? 1 : 0;
+    const bool h265 = use_h265(config_);
     out << "v=0\n"
         << "o=- 0 0 IN IP4 127.0.0.1\n"
         << "s=VisionCast RTP Stream\n"
         << "c=IN IP4 " << config_.stream.server_ip << "\n"
         << "t=0 0\n"
         << "m=video " << config_.stream.video_port << " RTP/AVP 96\n"
-        << "a=rtpmap:96 H264/90000\n"
-        << "a=fmtp:96 packetization-mode=1;profile-level-id=42e01f\n"
-        << "a=recvonly\n"
+        << "a=rtpmap:96 " << (h265 ? "H265" : "H264") << "/90000\n";
+    if (h265) {
+        out << "a=fmtp:96 profile-id=1\n";
+    } else {
+        out << "a=fmtp:96 packetization-mode=1;profile-level-id=42e01f\n";
+    }
+    out << "a=recvonly\n"
         << "m=audio " << config_.stream.audio_port << " RTP/AVP "
         << static_cast<int>(kOpusPayloadType) << "\n"
         << "a=rtpmap:" << static_cast<int>(kOpusPayloadType) << " opus/"

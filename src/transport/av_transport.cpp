@@ -23,8 +23,8 @@ AvTransport::AvTransport(VisionCastConfig config)
       video_rtp_(96, 0x56435631U),
       audio_rtp_(kOpusPayloadType, 0x56434131U),
       audio_encoder_(config_.audio.frame_ms),
-      rtmp_(config_.stream.rtmp_url, config_.video, config_.audio),
-      webrtc_(config_.stream.webrtc_url, config_.video, config_.audio) {}
+      rtmp_(config_.stream.rtmp_url, config_.video, config_.audio, config_.encoder),
+      webrtc_(config_.stream.webrtc_url, config_.video, config_.audio, config_.encoder) {}
 
 AvTransport::~AvTransport() {
     close();
@@ -99,7 +99,7 @@ bool AvTransport::send_video(const EncodedPacket& packet, std::string& error) {
     }
     
     // 3. RTMP 协议发送分支：将编码后的原始 H.264/H.265 帧推送至 RTMP 推流器
-    return rtmp_.push_video(packet.data.data(), packet.data.size(), packet.pts_us, error);
+    return rtmp_.push_video(packet, error);
 }
 
 bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {

@@ -49,8 +49,8 @@
 ## 6. RTMP 画面写入 FLV Muxer 格式错误
 
 - **现象**：RTMP 推流日志正常，但是拉流端渲染黑屏或提示格式解析失败。
-- **原因**：MPP 硬编码输出的是 Annex-B 字节流（包含 3 字节或 4 字节的 0x000001 / 0x00000001 起始码），但是 FLV/RTMP 封装要求使用 AVCC 格式（即 4 字节大端 NAL 长度前缀），直接写入起始码会导致播放端反初始化解码器失败。
-- **已实现的解决办法**：在 `RtmpPusher` 的发送逻辑中，实现了一个 Annex-B 到 AVCC 的转换器。拦截 MPP 的输出帧，剥离起始码并提取为 SPS/PPS 组成 AVC decoder configuration record 首帧发送，后续帧均重组为长度前缀格式写入 FFmpeg 容器。
+- **原因**：MPP 硬编码输出的是 Annex-B 字节流（包含 3 字节或 4 字节的 `0x000001` / `0x00000001` 起始码）。旧版 FFmpeg FLV muxer 对 H.264/H.265 封装能力有限，直接写入或缺少正确参数集时会导致播放端反初始化解码器失败。
+- **已实现的解决办法**：升级项目内置 FFmpeg 到 8.1.1。`RtmpPusher` 只从首帧提取 H.264 SPS/PPS 或 H.265 VPS/SPS/PPS 作为 extradata，后续 Annex-B packet 交给 FFmpeg FLV muxer，由其生成 AVC 或 Enhanced RTMP/HEVC 封装。
 
 ---
 

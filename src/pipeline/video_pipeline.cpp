@@ -4,7 +4,7 @@
  * @details 实现了 VideoPipeline 类。主要流程包括：初始化及启动硬件加速编码器（MppEncoder）、
  *          基于 V4L2 开启采集工作线程、将采集到的原始帧送入缓冲队列。在工作线程循环中：
  *          利用 RgaProcessor 进行图像像素格式转换（转换为 NV12 供编码器使用），
- *          利用 MppEncoder 执行 H.264 视频硬件编码，按配置投递 NV12 图像到 DisplayRenderer 进行本地显示渲染，
+ *          利用 MppEncoder 执行 H.264/H.265 视频硬件编码，按配置投递 NV12 图像到 DisplayRenderer 进行本地显示渲染，
  *          最后通过 AvTransport 发送编码后的视频数据。
  */
 
@@ -39,7 +39,7 @@ bool VideoPipeline::start(std::string& error) {
         return true; // 已在运行，直接返回
     }
     
-    // 1. 初始化并打开 Rockchip MPP H.264 硬件编码器
+    // 1. 初始化并打开 Rockchip MPP 硬件编码器
     if (!encoder_.open(error)) {
         return false;
     }
@@ -173,7 +173,7 @@ void VideoPipeline::worker_loop() {
         EncodedPacket encoded;
         const std::uint64_t t_encode_start = monotonic_now_us();
         
-        // B. 使用 Rockchip MPP 硬件编码器进行 H.264 压缩编码
+        // B. 使用 Rockchip MPP 硬件编码器进行 H.264/H.265 压缩编码
         if (!encoder_.encode(nv12, encoded, error)) {
             VC_LOG_ERROR("mpp", error);
             {

@@ -38,7 +38,7 @@ pgrep -af visioncast
 - `前处理路径(fd/直通/拷贝)`：RGA fd-to-fd、DMA 直通、CPU/VA 拷贝路径计数。
 - `MPP输入(DMA/COPY)`：MPP 编码输入是 DMA-BUF 导入还是 CPU 拷贝。
 - `MJPEG(hw/sw/dma输出)`：MJPEG 硬解、软解、解码输出 DMA-BUF 的帧数。
-- `码率`：编码后进入传输层的 H.264 payload 码率，单位直接跟在数值后，例如 `4000.00kbps`。
+- `码率`：编码后进入传输层的视频 payload 码率，单位直接跟在数值后，例如 `4000.00kbps`。
 - `平均`：单个编码包平均大小，单位直接跟在数值后，例如 `16.30KB`。
 - `处理失败`：前处理失败次数，包含无效 MJPEG、RGA/解码失败等。
 - `编码无输出`：MPP 本次编码未返回 packet 的帧数。
@@ -66,7 +66,7 @@ pgrep -af visioncast
 V4L2 EXPBUF fd
   -> VideoFrame::dma
   -> RGA 直通
-  -> MPP H.264 EXT_DMA 输入
+  -> MPP H.264/H.265 EXT_DMA 输入
   -> EncodedPacket
   -> RTP / RTMP / WebRTC
 ```
@@ -78,7 +78,7 @@ V4L2 bytesused JPEG payload
   -> MPP MJPEG 解码输入 buffer
   -> MPP 解码输出 NV12 DMA-BUF
   -> RGA 直通或 fd-to-fd resize
-  -> MPP H.264 EXT_DMA 输入
+  -> MPP H.264/H.265 EXT_DMA 输入
   -> EncodedPacket
   -> RTP / RTMP / WebRTC
 ```
@@ -92,12 +92,12 @@ V4L2 bytesused JPEG payload
 编码后封包阶段已经做了低风险收敛：
 
 - RTP/WebRTC：`RtpPacketizer::packetize_each()` 逐包回调发送，不再为每帧先保存完整 `vector<RtpPacket>` 后再遍历发送。
-- RTP/WebRTC H.264：实时发送路径按 Annex-B NALU 流式扫描，不再先构造每帧 NALU offset 列表。
+- RTP/WebRTC H.264/H.265：实时发送路径按 Annex-B NALU 流式扫描，不再先构造每帧 NALU offset 列表。
 - RTP FU-A：直接构造最终 RTP packet，避免每个分片先生成临时 payload vector。
-- RTMP：Annex-B NALU 解析改为指针/长度视图，不再为每个 NALU 生成临时 `vector`；AVCC payload 缓冲区在 `RtmpPusher` 内复用。
+- RTMP：Annex-B NALU 解析仅用于提取 H.264/H.265 参数集，视频 packet 交给内置 FFmpeg 8.1.1 FLV muxer 写出。
 - RTP/WebRTC 音频：Opus 输入 PCM 缓存使用 offset 消费，并复用 Opus 输入 scratch buffer，避免每帧前端 `erase` 和临时 PCM vector 分配。
 - RTMP 音频：AAC 输入 PCM 缓存使用 offset 消费，只在缓存全部消费或超过半数已消费时压缩一次。
-- RTMP 仍需要生成 AVCC payload，因为 FLV/RTMP 要 4 字节长度前缀，而 MPP 输出是 Annex-B 起始码格式。
+- RTMP H.265 依赖 Enhanced RTMP/HEVC 支持；服务端或播放器不支持时需切回 `encoder.video_codec=h264`。
 
 ## 5. 音频日志格式
 

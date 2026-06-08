@@ -3,7 +3,7 @@
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
 > 摄像头：13855 MIPI 摄像头 (主) / USB C270 (备)
-> 目标：第一视角视频采集输入，经 ISP 优化、RGA 加速与 MPP H.264 硬件编码进入推流管线
+> 目标：第一视角视频采集输入，经 ISP 优化、RGA 加速与 MPP H.264/H.265 硬件编码进入推流管线
 
 ---
 
@@ -47,7 +47,7 @@
 [RgaProcessor] (目标尺寸 NV12 直通；必要时 RGA fd-to-fd)
      │
      ▼
-[MppEncoder] (H.264 Baseline 硬编码，EXT_DMA 输入)
+[MppEncoder] (H.264/H.265 硬编码，EXT_DMA 输入)
      │
      ├──> [DisplayRenderer] (编码成功后移动同帧 VideoFrame；enable_preview=true)
      │
@@ -95,7 +95,7 @@
 
 - **RGA 预处理**：13855 当前输出目标尺寸 NV12，主路径不调用 RGA，直接 `BYPASS-DMA`。只有尺寸或格式不匹配时才通过 RGA fd-to-fd 处理。
 - **USB MJPEG 备用路径**：C270 输入先由 MPP MJPEG 解码为 NV12 DMA-BUF；尺寸匹配则直通，尺寸不匹配则进入 RGA fd-to-fd。详见 `docs/mjpeg_decode_flow.md`。
-- **MPP 编码**：`MppEncoder` 优先通过 `MPP_BUFFER_TYPE_EXT_DMA` 导入单平面 NV12 DMA-BUF，执行 H.264 Baseline CBR 编码，完全禁用 B 帧以消除延迟，输出 Annex-B 裸 H.264 码流。
+- **MPP 编码**：`MppEncoder` 优先通过 `MPP_BUFFER_TYPE_EXT_DMA` 导入单平面 NV12 DMA-BUF，按 `encoder.video_codec` 执行 H.264/H.265 CBR 编码，完全禁用 B 帧以消除延迟，输出 Annex-B 裸码流。
 
 ---
 
@@ -105,4 +105,4 @@
 2. **分辨率与帧率**：稳定在 `1280x720 @ 30 FPS`。
 3. **帧率防抖**：锁定了 vertical blanking 和 exposure，强弱光下物理帧率维持在 30 FPS。
 4. **备份机制**：若 `/dev/video11` MIPI 节点打开失败，程序能自动切换到备用 `/dev/video21` (USB C270)，使用 MJPEG + MPP MJPEG 硬解输出 NV12 DMA-BUF，必要时由 RGA fd-to-fd 处理，保障采集管线不中断。
-5. **零拷贝边界**：13855 到 MPP 编码输入主路径为 DMA-BUF；开启预览时仅额外持有同帧 DMA-BUF 句柄并由 RGA fd 输入渲染，不复制整帧 NV12；编码后 H.264 packet、显示输出和 RTP/RTMP/WebRTC 封包仍为 CPU 可见数据。
+5. **零拷贝边界**：13855 到 MPP 编码输入主路径为 DMA-BUF；开启预览时仅额外持有同帧 DMA-BUF 句柄并由 RGA fd 输入渲染，不复制整帧 NV12；编码后 packet、显示输出和 RTP/RTMP/WebRTC 封包仍为 CPU 可见数据。

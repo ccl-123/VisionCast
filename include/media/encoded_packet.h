@@ -22,11 +22,21 @@ enum class MediaType {
 };
 
 /**
+ * @enum VideoCodec
+ * @brief 视频编码格式枚举，用于指导 RTP/SDP/协议封装选择正确格式。
+ */
+enum class VideoCodec {
+    H264,
+    H265,
+};
+
+/**
  * @struct EncodedPacket
  * @brief 表示编码压缩后的媒体数据包（如 H.264/H.265 NAL 单元或 Opus 音频包）
  */
 struct EncodedPacket {
     MediaType media_type = MediaType::Video; // 媒体类型，默认视频
+    VideoCodec video_codec = VideoCodec::H264; // 视频编码格式，音频包忽略
     std::vector<std::uint8_t> data;          // 编码后的媒体二进制数据缓冲区
     std::uint64_t pts_us = 0;                // 演示时间戳（Presentation Time Stamp），单位微秒
     bool key_frame = false;                  // 是否为关键帧（例如视频的 I 帧，音频包通常为 false 或忽略）

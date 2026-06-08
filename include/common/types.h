@@ -55,7 +55,7 @@ struct AudioConfig {
  * @brief 编码器参数配置结构体（支持瑞芯微 MPP 硬件加速编码与 FFmpeg 软件编码）。
  */
 struct EncoderConfig {
-    std::string video_codec = "h264";           ///< 视频编码格式，支持 "h264", "h265", "mjpeg"
+    std::string video_codec = "h264";           ///< 视频编码格式，支持 "h264" 或 "h265"
     int bitrate = 4000000;                      ///< 目标编码码率（bps，比特每秒）
     int gop = 30;                               ///< 关键帧间隔（Group Of Pictures），即多少帧包含一个 I 帧
     bool low_latency = true;                    ///< 是否启用低延迟模式（如关闭 MPP B帧，开启立即刷新）

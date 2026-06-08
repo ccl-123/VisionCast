@@ -106,6 +106,12 @@ if (VISIONCAST_TARGET_RK3588
     AND EXISTS "${SWRESAMPLE_LIB}")
     target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_FFMPEG=1)
     target_include_directories(visioncast SYSTEM PRIVATE ${FFMPEG_INC_DIR})
+    target_link_libraries(visioncast PRIVATE
+        ${AVFORMAT_LIB}
+        ${AVCODEC_LIB}
+        ${AVUTIL_LIB}
+        ${SWRESAMPLE_LIB}
+    )
 else()
     message(WARNING "AArch64 FFmpeg development files were not found; RTMP mode will be disabled")
 endif()
@@ -169,5 +175,16 @@ if (EXISTS "${OPUS_LIB_DIR}")
         "${THIRDPARTY_DIR}/opus/COPYING"
         "${THIRDPARTY_DIR}/opus/README.md"
         DESTINATION share/licenses/opus
+    )
+endif()
+
+if (EXISTS "${FFMPEG_LIB_DIR}")
+    install(DIRECTORY "${FFMPEG_LIB_DIR}/"
+        DESTINATION lib
+        FILES_MATCHING
+            PATTERN "libavformat.so*"
+            PATTERN "libavcodec.so*"
+            PATTERN "libavutil.so*"
+            PATTERN "libswresample.so*"
     )
 endif()

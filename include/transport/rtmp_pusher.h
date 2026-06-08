@@ -18,6 +18,7 @@
 #include <string>
 
 #include "common/types.h"
+#include "media/encoded_packet.h"
 
 namespace visioncast {
 
@@ -35,7 +36,7 @@ public:
      * @param video 视频编码及格式配置信息
      * @param audio 音频编码及格式配置信息
      */
-    RtmpPusher(std::string rtmp_url, VideoConfig video, AudioConfig audio);
+    RtmpPusher(std::string rtmp_url, VideoConfig video, AudioConfig audio, EncoderConfig encoder);
 
     /**
      * @brief 析构函数，负责断开连接并释放内部推流资源
@@ -55,14 +56,12 @@ public:
     void disconnect();
 
     /**
-     * @brief 向 RTMP 服务器发送一帧编码后的视频数据（例如 H.264/H.265 的 NALU）
-     * @param data 待发送的视频码流缓冲区指针
-     * @param size 视频帧的字节数大小
-     * @param pts_us 视频帧的呈现时间戳（单位：微秒），用于 RTMP 时间戳同步
+     * @brief 向 RTMP 服务器发送一帧编码后的 H.264/H.265 Annex-B 码流
+     * @param packet 待发送的视频包，包含码流数据、时间戳和视频编码格式
      * @param error 传入传出参数，用于返回发送失败时的错误消息
      * @return 推送成功返回 true，失败返回 false
      */
-    bool push_video(const uint8_t* data, size_t size, uint64_t pts_us, std::string& error);
+    bool push_video(const EncodedPacket& packet, std::string& error);
 
     /**
      * @brief 向 RTMP 服务器发送一帧编码后的音频数据（例如 AAC 音频包）
@@ -79,7 +78,7 @@ private:
     std::string rtmp_url_;            ///< RTMP 服务器的目标推流 URL
     VideoConfig video_;               ///< 视频配置（分辨率、码率、帧率、编码格式等）
     AudioConfig audio_;               ///< 音频配置（采样率、通道数、格式、编码格式等）
+    EncoderConfig encoder_;           ///< 编码器配置，用于声明 H.264/H.265 RTMP 视频参数
 };
 
 } // namespace visioncast
-

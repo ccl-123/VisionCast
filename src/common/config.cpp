@@ -323,6 +323,24 @@ std::optional<bool> bool_value(const std::string& object, const std::string& key
     return std::nullopt;
 }
 
+std::string lower_ascii(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+std::string normalize_video_codec(std::string value) {
+    value = lower_ascii(value);
+    if (value == "h.264" || value == "avc") {
+        return "h264";
+    }
+    if (value == "h.265" || value == "hevc") {
+        return "h265";
+    }
+    return value;
+}
+
 /**
  * @brief 将 JSON 对象的字段填充到 VideoConfig 视频配置结构体中。
  */
@@ -364,7 +382,9 @@ void apply_audio_config(const std::string& object, AudioConfig& audio) {
  * @brief 将 JSON 对象的字段填充到 EncoderConfig 编码配置结构体中。
  */
 void apply_encoder_config(const std::string& object, EncoderConfig& encoder) {
-    if (auto value = string_value(object, "video_codec")) encoder.video_codec = *value;
+    if (auto value = string_value(object, "video_codec")) {
+        encoder.video_codec = normalize_video_codec(*value);
+    }
     if (auto value = int_value(object, "bitrate")) encoder.bitrate = *value;
     if (auto value = int_value(object, "gop")) encoder.gop = *value;
     if (auto value = bool_value(object, "low_latency")) encoder.low_latency = *value;
@@ -420,6 +440,10 @@ bool is_supported_opus_frame_ms(int frame_ms) {
            frame_ms == 60;
 }
 
+bool is_supported_video_codec(const std::string& codec) {
+    return codec == "h264" || codec == "h265";
+}
+
 }  // namespace
 
 void replace_all(std::string& str, const std::string& from, const std::string& to) {
@@ -461,6 +485,11 @@ bool load_config_file(const std::string& path, VisionCastConfig& config, std::st
 }
 
 bool validate_config(const VisionCastConfig& config, std::string& error) {
+    if (!is_supported_video_codec(config.encoder.video_codec)) {
+        error = "encoder.video_codec must be h264 or h265";
+        return false;
+    }
+
     if (config.audio.channels != 1 && config.audio.channels != 2) {
         error = "audio.channels must be 1 or 2";
         return false;
