@@ -97,6 +97,7 @@ EncodedPacket AudioEncoder::encode(const AudioFrame& frame, std::string& error) 
     if (opus_encoder_ != nullptr &&
         (opus_sample_rate_ != frame.sample_rate || opus_channels_ != frame.channels)) {
         pending_pcm_.clear();
+        pending_pcm_offset_ = 0;
         pending_pts_us_ = 0;
     }
 
@@ -104,13 +105,18 @@ EncodedPacket AudioEncoder::encode(const AudioFrame& frame, std::string& error) 
         return packet;
     }
 
+    if (pending_pcm_offset_ == pending_pcm_.size()) {
+        pending_pcm_.clear();
+        pending_pcm_offset_ = 0;
+        pending_pts_us_ = 0;
+    }
     if (pending_pcm_.empty()) {
         pending_pts_us_ = frame.pts_us;
     }
     pending_pcm_.insert(pending_pcm_.end(), frame.pcm.begin(), frame.pcm.end());
 
     const std::size_t encoded_pcm_bytes = samples_per_channel * bytes_per_sample_frame;
-    if (pending_pcm_.size() < encoded_pcm_bytes) {
+    if (pending_pcm_.size() < pending_pcm_offset_ + encoded_pcm_bytes) {
         packet.data.clear();
         error.clear();
         return packet;
@@ -119,22 +125,30 @@ EncodedPacket AudioEncoder::encode(const AudioFrame& frame, std::string& error) 
     packet.pts_us = pending_pts_us_;
     packet.rtp_timestamp = MediaClock::audio_rtp_timestamp(packet.pts_us, kOpusRtpClockRate);
 
-    std::vector<opus_int16> pcm(samples_per_channel * channels);
+    opus_pcm_.resize(samples_per_channel * channels);
+    const std::uint8_t* pcm_base = pending_pcm_.data() + pending_pcm_offset_;
     for (std::size_t sample = 0; sample < samples_per_channel * channels; ++sample) {
         const std::size_t offset = sample * kBytesPerSample;
-        pcm[sample] = static_cast<opus_int16>(read_s16le(pending_pcm_.data() + offset));
+        opus_pcm_[sample] = static_cast<opus_int16>(read_s16le(pcm_base + offset));
     }
-    pending_pcm_.erase(pending_pcm_.begin(),
-                       pending_pcm_.begin() + static_cast<std::ptrdiff_t>(encoded_pcm_bytes));
-    if (pending_pcm_.empty()) {
+    pending_pcm_offset_ += encoded_pcm_bytes;
+    if (pending_pcm_offset_ == pending_pcm_.size()) {
+        pending_pcm_.clear();
+        pending_pcm_offset_ = 0;
         pending_pts_us_ = 0;
     } else {
         pending_pts_us_ += static_cast<std::uint64_t>(opus_frame_ms_) * 1000ULL;
+        if (pending_pcm_offset_ >= pending_pcm_.size() / 2U) {
+            pending_pcm_.erase(pending_pcm_.begin(),
+                               pending_pcm_.begin() +
+                                   static_cast<std::ptrdiff_t>(pending_pcm_offset_));
+            pending_pcm_offset_ = 0;
+        }
     }
 
     packet.data.resize(kOpusMaxPacketBytes);
     const opus_int32 encoded_bytes = opus_encode(static_cast<OpusEncoder*>(opus_encoder_),
-                                                 pcm.data(),
+                                                 opus_pcm_.data(),
                                                  static_cast<int>(samples_per_channel),
                                                  packet.data.data(),
                                                  static_cast<opus_int32>(packet.data.size()));
@@ -196,6 +210,8 @@ void AudioEncoder::destroy_opus_encoder() {
     opus_sample_rate_ = 0;
     opus_channels_ = 0;
     pending_pcm_.clear();
+    pending_pcm_offset_ = 0;
+    opus_pcm_.clear();
     pending_pts_us_ = 0;
 }
 

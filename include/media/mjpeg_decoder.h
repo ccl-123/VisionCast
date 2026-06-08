@@ -37,8 +37,12 @@ public:
     // @param input 输入的 MJPEG 视频帧
     // @param output 输出的解码后视频帧（例如 NV12）
     // @param error 若解码失败，用于保存错误信息的字符串
+    // @param allow_dma_output 是否允许硬解输出 DMA-BUF 帧，可直接送入 RGA/MPP fd 路径
     // @return 解码成功返回 true，否则返回 false
-    bool decode(const VideoFrame& input, VideoFrame& output, std::string& error);
+    bool decode(const VideoFrame& input,
+                VideoFrame& output,
+                std::string& error,
+                bool allow_dma_output = true);
 
     // Returns true if the last frame was decoded using Rockchip MPP hardware acceleration.
     bool is_hardware_accelerated() const;

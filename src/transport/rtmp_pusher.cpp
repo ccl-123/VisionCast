@@ -10,6 +10,7 @@
 #include "transport/rtmp_pusher.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <dlfcn.h>
 #include <sstream>
@@ -31,6 +32,11 @@ extern "C" {
 
 namespace visioncast {
 
+struct RtmpNaluSpan {
+    const std::uint8_t* data = nullptr;
+    std::size_t size = 0;
+};
+
 struct RtmpPusher::Impl {
 #if defined(VISIONCAST_ENABLE_FFMPEG)
     AVFormatContext* format = nullptr;
@@ -40,6 +46,9 @@ struct RtmpPusher::Impl {
     SwrContext* resampler = nullptr;
     AVFrame* audio_frame = nullptr;
     std::vector<std::int16_t> pcm_samples;
+    std::size_t pcm_sample_offset = 0;
+    std::vector<RtmpNaluSpan> video_nalus;
+    std::vector<std::uint8_t> video_payload;
     std::int64_t audio_samples_written = 0;
     std::uint64_t first_video_pts_us = 0;
     bool header_written = false;
@@ -205,10 +214,12 @@ std::size_t start_code_size(const std::uint8_t* data,
     return 0;
 }
 
-// 解析 H.264 Annex-B 码流，寻找所有的 NAL 单元并存入 vector
-std::vector<std::vector<std::uint8_t>> find_nalus(const std::uint8_t* data,
-                                                   std::size_t size) {
-    std::vector<std::vector<std::uint8_t>> nalus;
+// 解析 H.264 Annex-B 码流，记录 NALU 视图，避免为每个 NALU 生成临时 vector。
+bool find_nalus(const std::uint8_t* data,
+                std::size_t size,
+                std::vector<RtmpNaluSpan>& nalus,
+                std::string& error) {
+    nalus.clear();
     std::size_t pos = 0;
     while (pos < size) {
         const std::size_t code = start_code_size(data, size, pos);
@@ -222,51 +233,54 @@ std::vector<std::vector<std::uint8_t>> find_nalus(const std::uint8_t* data,
             ++pos;
         }
         if (pos > start) {
-            nalus.emplace_back(data + start, data + pos);
+            nalus.push_back(RtmpNaluSpan{data + start, pos - start});
         }
     }
-    return nalus;
+    if (nalus.empty()) {
+        error = "H264 frame does not contain Annex-B start-code NAL units";
+        return false;
+    }
+    return true;
 }
 
 // 从首个视频帧中提取 SPS 和 PPS，构建 FLV/RTMP 推流所需的 AVCC Extradata (avcC 头部配置包)
 bool set_avc_extradata(AVCodecParameters* parameters,
-                       const std::uint8_t* data,
-                       std::size_t size,
+                       const std::vector<RtmpNaluSpan>& nalus,
                        std::string& error) {
-    std::vector<std::uint8_t> sps;
-    std::vector<std::uint8_t> pps;
-    for (auto& nalu : find_nalus(data, size)) {
-        if (nalu.empty()) {
+    RtmpNaluSpan sps;
+    RtmpNaluSpan pps;
+    for (const auto& nalu : nalus) {
+        if (nalu.data == nullptr || nalu.size == 0) {
             continue;
         }
-        const std::uint8_t type = nalu[0] & 0x1FU;
-        if (type == 7 && sps.empty()) {
-            sps = std::move(nalu);
-        } else if (type == 8 && pps.empty()) {
-            pps = std::move(nalu);
+        const std::uint8_t type = nalu.data[0] & 0x1FU;
+        if (type == 7 && sps.data == nullptr) {
+            sps = nalu;
+        } else if (type == 8 && pps.data == nullptr) {
+            pps = nalu;
         }
     }
-    if (sps.size() < 4 || pps.empty() || sps.size() > 65535U ||
-        pps.size() > 65535U) {
+    if (sps.size < 4 || pps.size == 0 || sps.size > 65535U ||
+        pps.size > 65535U) {
         error = "first RTMP H264 frame does not contain valid SPS/PPS";
         return false;
     }
 
     std::vector<std::uint8_t> avcc;
-    avcc.reserve(11U + sps.size() + pps.size());
+    avcc.reserve(11U + sps.size + pps.size);
     avcc.push_back(1);
-    avcc.push_back(sps[1]);
-    avcc.push_back(sps[2]);
-    avcc.push_back(sps[3]);
+    avcc.push_back(sps.data[1]);
+    avcc.push_back(sps.data[2]);
+    avcc.push_back(sps.data[3]);
     avcc.push_back(0xFF);
     avcc.push_back(0xE1);
-    avcc.push_back(static_cast<std::uint8_t>(sps.size() >> 8));
-    avcc.push_back(static_cast<std::uint8_t>(sps.size()));
-    avcc.insert(avcc.end(), sps.begin(), sps.end());
+    avcc.push_back(static_cast<std::uint8_t>(sps.size >> 8));
+    avcc.push_back(static_cast<std::uint8_t>(sps.size));
+    avcc.insert(avcc.end(), sps.data, sps.data + sps.size);
     avcc.push_back(1);
-    avcc.push_back(static_cast<std::uint8_t>(pps.size() >> 8));
-    avcc.push_back(static_cast<std::uint8_t>(pps.size()));
-    avcc.insert(avcc.end(), pps.begin(), pps.end());
+    avcc.push_back(static_cast<std::uint8_t>(pps.size >> 8));
+    avcc.push_back(static_cast<std::uint8_t>(pps.size));
+    avcc.insert(avcc.end(), pps.data, pps.data + pps.size);
 
     parameters->extradata = static_cast<std::uint8_t*>(
         ffmpeg().av_mallocz(avcc.size() + AV_INPUT_BUFFER_PADDING_SIZE));
@@ -280,34 +294,33 @@ bool set_avc_extradata(AVCodecParameters* parameters,
 }
 
 // 将 H.264 Annex-B 编码包（带起始码）转换为 FLV/RTMP 要求的 AVCC 格式数据负载（4字节大端长度前缀 + NALU 数据）
-bool annexb_to_avcc_payload(const std::uint8_t* data,
-                            std::size_t size,
+bool annexb_to_avcc_payload(const std::vector<RtmpNaluSpan>& nalus,
+                            std::size_t source_size,
                             std::vector<std::uint8_t>& payload,
                             std::string& error) {
-    const auto nalus = find_nalus(data, size);
     if (nalus.empty()) {
         error = "H264 frame does not contain Annex-B start-code NAL units";
         return false;
     }
 
     payload.clear();
-    payload.reserve(size);
+    payload.reserve(source_size + nalus.size());
     for (const auto& nalu : nalus) {
-        if (nalu.empty()) {
+        if (nalu.data == nullptr || nalu.size == 0) {
             continue;
         }
-        if (nalu.size() > 0xFFFFFFFFULL) {
+        if (nalu.size > 0xFFFFFFFFULL) {
             error = "H264 NAL unit is too large for AVC length prefix";
             return false;
         }
-        const auto nalu_size = static_cast<std::uint32_t>(nalu.size());
+        const auto nalu_size = static_cast<std::uint32_t>(nalu.size);
         // FLV/RTMP stores AVC samples as 4-byte big-endian length + NAL,
         // while MPP emits Annex-B start-code framed H.264.
         payload.push_back(static_cast<std::uint8_t>((nalu_size >> 24) & 0xFFU));
         payload.push_back(static_cast<std::uint8_t>((nalu_size >> 16) & 0xFFU));
         payload.push_back(static_cast<std::uint8_t>((nalu_size >> 8) & 0xFFU));
         payload.push_back(static_cast<std::uint8_t>(nalu_size & 0xFFU));
-        payload.insert(payload.end(), nalu.begin(), nalu.end());
+        payload.insert(payload.end(), nalu.data, nalu.data + nalu.size);
     }
     if (payload.empty()) {
         error = "H264 frame did not contain non-empty NAL units";
@@ -344,14 +357,16 @@ bool write_encoded_audio(RtmpPusher::Impl& impl, std::string& error) {
 // 将缓存的 PCM 音频样本进行重采样（SwrContext），送入 AAC 编码器中进行编码并输出
 bool encode_pending_audio(RtmpPusher::Impl& impl, std::string& error) {
     const int frame_samples = impl.audio_encoder->frame_size;
-    while (impl.pcm_samples.size() >= static_cast<std::size_t>(frame_samples)) {
+    while (impl.pcm_samples.size() >=
+           impl.pcm_sample_offset + static_cast<std::size_t>(frame_samples)) {
         int ret = ffmpeg().av_frame_make_writable(impl.audio_frame);
         if (ret < 0) {
             error = ffmpeg_error("av_frame_make_writable(AAC)", ret);
             return false;
         }
         const std::uint8_t* input_data =
-            reinterpret_cast<const std::uint8_t*>(impl.pcm_samples.data());
+            reinterpret_cast<const std::uint8_t*>(impl.pcm_samples.data() +
+                                                  impl.pcm_sample_offset);
         ret = ffmpeg().swr_convert(impl.resampler,
                                    impl.audio_frame->data,
                                    frame_samples,
@@ -363,8 +378,7 @@ bool encode_pending_audio(RtmpPusher::Impl& impl, std::string& error) {
         }
         impl.audio_frame->pts = impl.audio_samples_written;
         impl.audio_samples_written += ret;
-        impl.pcm_samples.erase(
-            impl.pcm_samples.begin(), impl.pcm_samples.begin() + frame_samples);
+        impl.pcm_sample_offset += static_cast<std::size_t>(frame_samples);
 
         ret = ffmpeg().avcodec_send_frame(impl.audio_encoder, impl.audio_frame);
         if (ret < 0) {
@@ -374,6 +388,14 @@ bool encode_pending_audio(RtmpPusher::Impl& impl, std::string& error) {
         if (!write_encoded_audio(impl, error)) {
             return false;
         }
+    }
+    if (impl.pcm_sample_offset > 0 &&
+        (impl.pcm_sample_offset == impl.pcm_samples.size() ||
+         impl.pcm_sample_offset >= impl.pcm_samples.size() / 2U)) {
+        impl.pcm_samples.erase(impl.pcm_samples.begin(),
+                               impl.pcm_samples.begin() +
+                                   static_cast<std::ptrdiff_t>(impl.pcm_sample_offset));
+        impl.pcm_sample_offset = 0;
     }
     return true;
 }
@@ -543,6 +565,9 @@ void RtmpPusher::disconnect() {
     impl_->video_stream = nullptr;
     impl_->audio_stream = nullptr;
     impl_->pcm_samples.clear();
+    impl_->pcm_sample_offset = 0;
+    impl_->video_nalus.clear();
+    impl_->video_payload.clear();
     impl_->audio_samples_written = 0;
     impl_->first_video_pts_us = 0;
     impl_->header_written = false;
@@ -559,9 +584,12 @@ bool RtmpPusher::push_video(const std::uint8_t* data,
         error = "RTMP pusher is not connected or video frame is empty";
         return false;
     }
+    if (!find_nalus(data, size, impl_->video_nalus, error)) {
+        return false;
+    }
     // 若尚未写入 FLV 文件头，则先解析 SPS/PPS 提取 extradata，并建立网络连接写入文件头
     if (!impl_->header_written) {
-        if (!set_avc_extradata(impl_->video_stream->codecpar, data, size, error)) {
+        if (!set_avc_extradata(impl_->video_stream->codecpar, impl_->video_nalus, error)) {
             return false;
         }
         int ret = ffmpeg().avio_open(
@@ -579,21 +607,19 @@ bool RtmpPusher::push_video(const std::uint8_t* data,
         impl_->header_written = true;
     }
 
-    std::vector<std::uint8_t> avcc_payload;
-    if (!annexb_to_avcc_payload(data, size, avcc_payload, error)) {
+    if (!annexb_to_avcc_payload(impl_->video_nalus, size, impl_->video_payload, error)) {
         return false;
     }
 
     AVPacket packet{};
-    packet.data = avcc_payload.data();
-    packet.size = static_cast<int>(avcc_payload.size());
+    packet.data = impl_->video_payload.data();
+    packet.size = static_cast<int>(impl_->video_payload.size());
     packet.stream_index = impl_->video_stream->index;
     packet.pts = packet.dts =
         static_cast<std::int64_t>((pts_us - impl_->first_video_pts_us) / 1000U);
     packet.duration = std::max(1, 1000 / std::max(1, video_.fps));
-    const auto nalus = find_nalus(data, size);
-    if (std::any_of(nalus.begin(), nalus.end(), [](const auto& nalu) {
-            return !nalu.empty() && (nalu[0] & 0x1FU) == 5;
+    if (std::any_of(impl_->video_nalus.begin(), impl_->video_nalus.end(), [](const auto& nalu) {
+            return nalu.data != nullptr && nalu.size > 0 && (nalu.data[0] & 0x1FU) == 5;
         })) {
         packet.flags |= AV_PKT_FLAG_KEY;
     }

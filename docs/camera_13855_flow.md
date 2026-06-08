@@ -40,15 +40,19 @@
      ▼
 [rkisp_mainpath] (/dev/video11, MPLANE NV12 30FPS)
      │
-     ├─────────────────────────────────────────┐
-     ▼ (推流管线)                                ▼ (本地显示管线)
-[RgaProcessor] (im2d 硬件色彩/大小转换)     [DisplayRenderer] (异步线程)
-     │                                         │
-     ▼                                         ▼
-[MppEncoder] (H.264 Baseline 硬编码)        [OpenCV HighGUI] (X11 窗口渲染)
+     ▼
+[V4L2 EXPBUF DMA-BUF]
      │
      ▼
-[AvTransport] (多协议推送抽象层)
+[RgaProcessor] (目标尺寸 NV12 直通；必要时 RGA fd-to-fd)
+     │
+     ▼
+[MppEncoder] (H.264 Baseline 硬编码，EXT_DMA 输入)
+     │
+     ├──> [DisplayRenderer] (仅 CPU 可见帧异步预览；DMA-only 主路径跳过)
+     │
+     ▼
+[AvTransport] (RTP / RTMP / WebRTC)
 ```
 
 ---
@@ -81,14 +85,16 @@
 - **采集节点**：已确认 13855 摄像头主通道采集节点为 `/dev/video11` (rkisp_mainpath)。
 - **视频能力**：支持 `V4L2_CAP_VIDEO_CAPTURE_MPLANE` (多平面视频采集能力)。
 - **输出格式**：输出 1280x720 30FPS 的 NV12 格式帧。
-- **采集模式**：V4L2 多平面 MMAP 缓冲出队，使用 `CLOCK_MONOTONIC` 单调时钟对出队瞬间打上采集时间戳。
+- **采集模式**：V4L2 多平面 MMAP 缓冲出队，使用 `VIDIOC_EXPBUF` 导出 DMA-BUF fd，并用 `CLOCK_MONOTONIC` 单调时钟对出队瞬间打上采集时间戳。
+- **生命周期**：DMA-BUF 帧通过 `VideoFrame::dma.release` 归还 V4L2 buffer，避免硬件处理未结束时过早 `VIDIOC_QBUF`。
 
 ---
 
 ## 7. RGA 转换与 MPP 硬件编码
 
-- **RGA 预处理**：`RgaProcessor` 封装了 `im2d_api` 硬件加速接口。即使 `/dev/video11` 采集的不是标准 NV12 格式（或备用 USB 摄像头输入 YUYV），RGA 均能在 2ms 内将其高效缩放并色彩空间转换为标准 NV12，提供给 MPP。
-- **MPP 编码**：`MppEncoder` 接收 NV12 帧，执行 H.264 Baseline CBR 编码，完全禁用 B 帧以消除延迟，输出 Annex-B 裸 H.264 码流。
+- **RGA 预处理**：13855 当前输出目标尺寸 NV12，主路径不调用 RGA，直接 `BYPASS-DMA`。只有尺寸或格式不匹配时才通过 RGA fd-to-fd 处理。
+- **USB MJPEG 备用路径**：C270 输入先由 MPP MJPEG 解码为 NV12 DMA-BUF；尺寸匹配则直通，尺寸不匹配则进入 RGA fd-to-fd。详见 `docs/mjpeg_decode_flow.md`。
+- **MPP 编码**：`MppEncoder` 优先通过 `MPP_BUFFER_TYPE_EXT_DMA` 导入单平面 NV12 DMA-BUF，执行 H.264 Baseline CBR 编码，完全禁用 B 帧以消除延迟，输出 Annex-B 裸 H.264 码流。
 
 ---
 
@@ -97,4 +103,5 @@
 1. **主采集节点**：确定为 `/dev/video11`。
 2. **分辨率与帧率**：稳定在 `1280x720 @ 30 FPS`。
 3. **帧率防抖**：锁定了 vertical blanking 和 exposure，强弱光下物理帧率维持在 30 FPS。
-4. **备份机制**：若 `/dev/video11` MIPI 节点打开失败，程序能自动切换到备用 `/dev/video21` (USB C270)，使用 MJPEG + MPP MJPEG 硬解或 libjpeg-turbo 软解，再由 RGA 转为 NV12，保障采集管线不中断。
+4. **备份机制**：若 `/dev/video11` MIPI 节点打开失败，程序能自动切换到备用 `/dev/video21` (USB C270)，使用 MJPEG + MPP MJPEG 硬解输出 NV12 DMA-BUF，必要时由 RGA fd-to-fd 处理，保障采集管线不中断。
+5. **零拷贝边界**：13855 到 MPP 编码输入主路径为 DMA-BUF；编码后 H.264 packet 和 RTP/RTMP/WebRTC 封包仍为 CPU 可见数据。

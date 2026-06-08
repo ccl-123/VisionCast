@@ -9,14 +9,23 @@
 
 #include "media/rga_processor.h"
 
+#include <unistd.h>
+
 #include <algorithm>
+
 #include "common/log.h"
+#include "common/time_utils.h"
 #include <cstddef>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #if defined(VISIONCAST_ENABLE_RGA)
 #include "im2d.h"
+#endif
+
+#if defined(VISIONCAST_ENABLE_RGA) && defined(VISIONCAST_ENABLE_MPP)
+#include "mpp_buffer.h"
 #endif
 
 namespace visioncast {
@@ -139,6 +148,125 @@ int rga_format(const std::string& format) {
     return 0;
 }
 
+#if defined(VISIONCAST_ENABLE_MPP)
+std::size_t nv12_storage_size(int stride, int vertical_stride) {
+    return static_cast<std::size_t>(stride) *
+           static_cast<std::size_t>(vertical_stride) * 3U / 2U;
+}
+
+MppBufferGroup& rga_dma_group() {
+    static MppBufferGroup group = nullptr;
+    return group;
+}
+
+bool ensure_rga_dma_group(std::string& error) {
+    MppBufferGroup& group = rga_dma_group();
+    if (group != nullptr) {
+        return true;
+    }
+    const MPP_RET ret = mpp_buffer_group_get_internal(&group, MPP_BUFFER_TYPE_DRM);
+    if (ret != MPP_OK || group == nullptr) {
+        error = "allocate RGA DMA buffer group failed ret=" + std::to_string(ret);
+        group = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool allocate_rga_dma_output(VideoFrame& output, MppBuffer& output_buffer, std::string& error) {
+    if (!ensure_rga_dma_group(error)) {
+        return false;
+    }
+    const std::size_t output_size = nv12_storage_size(output.stride, output.vertical_stride);
+    const MPP_RET ret = mpp_buffer_get(rga_dma_group(), &output_buffer, output_size);
+    if (ret != MPP_OK || output_buffer == nullptr) {
+        error = "allocate RGA DMA output failed ret=" + std::to_string(ret);
+        output_buffer = nullptr;
+        return false;
+    }
+    const int output_fd = mpp_buffer_get_fd(output_buffer);
+    if (output_fd < 0) {
+        mpp_buffer_put(output_buffer);
+        output_buffer = nullptr;
+        error = "RGA DMA output has no exportable fd";
+        return false;
+    }
+    return true;
+}
+
+bool attach_rga_dma_output(VideoFrame& output, MppBuffer output_buffer, std::string& error) {
+    const int output_fd = mpp_buffer_get_fd(output_buffer);
+    const int frame_fd = dup(output_fd);
+    if (frame_fd < 0) {
+        mpp_buffer_put(output_buffer);
+        error = "dup RGA DMA output fd failed";
+        return false;
+    }
+
+    auto dma = std::make_shared<VideoDmaBuffer>();
+    VideoDmaPlane plane;
+    plane.fd = frame_fd;
+    plane.offset = 0;
+    plane.bytesused = nv12_storage_size(output.stride, output.vertical_stride);
+    plane.length = mpp_buffer_get_size(output_buffer);
+    dma->planes.push_back(plane);
+    dma->release = [output_buffer] {
+        mpp_buffer_put(output_buffer);
+    };
+    output.dma = std::move(dma);
+    return true;
+}
+
+bool rga_process_dma_nv12(const VideoFrame& input,
+                          int output_width,
+                          int output_height,
+                          VideoFrame& output,
+                          std::string& error) {
+    const std::string in_format = normalize_format(input.format);
+    if (in_format != "NV12" || !input.has_single_plane_dma()) {
+        return false;
+    }
+    const auto& in_plane = input.dma->planes.front();
+    if (in_plane.fd < 0 || in_plane.offset != 0) {
+        return false;
+    }
+
+    output = {};
+    output.pts_us = input.pts_us;
+    output.width = output_width;
+    output.height = output_height;
+    output.stride = output_width;
+    output.vertical_stride = output_height;
+    output.sequence = input.sequence;
+    output.format = "NV12";
+
+    MppBuffer output_buffer = nullptr;
+    if (!allocate_rga_dma_output(output, output_buffer, error)) {
+        return false;
+    }
+
+    rga_buffer_t src = wrapbuffer_fd_t(in_plane.fd,
+                                      input.width,
+                                      input.height,
+                                      nv12_stride(input),
+                                      nv12_vertical_stride(input),
+                                      RK_FORMAT_YCbCr_420_SP);
+    rga_buffer_t dst = wrapbuffer_fd_t(mpp_buffer_get_fd(output_buffer),
+                                      output.width,
+                                      output.height,
+                                      output.stride,
+                                      output.vertical_stride,
+                                      RK_FORMAT_YCbCr_420_SP);
+    const IM_STATUS status = imresize(src, dst);
+    if (!rga_success(status)) {
+        mpp_buffer_put(output_buffer);
+        error = std::string("RGA DMA resize failed: ") + imStrError_t(status);
+        return false;
+    }
+    return attach_rga_dma_output(output, output_buffer, error);
+}
+#endif
+
 // 仅在 RGA 中执行同尺寸色彩空间转换
 bool rga_convert_same_size(const VideoFrame& input, VideoFrame& output, std::string& error) {
     const std::string in_format = normalize_format(input.format);
@@ -216,12 +344,88 @@ RgaProcessor::RgaProcessor(int output_width, int output_height)
 
 // 图像处理及缩放核心函数
 bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::string& error) {
-    if (input.width <= 0 || input.height <= 0 || input.data.empty()) {
+    last_frame_hardware_ = false;
+    last_mode_ = "CPU";
+    last_mjpeg_input_ = false;
+    last_mjpeg_hardware_ = false;
+    last_mjpeg_dma_output_ = false;
+    last_mjpeg_decode_us_ = 0;
+
+    if (input.width <= 0 || input.height <= 0 ||
+        (input.data.empty() && !input.has_dma())) {
         error = "invalid input video frame";
         return false;
     }
     if (output_width_ <= 0 || output_height_ <= 0) {
         error = "invalid RGA output size";
+        return false;
+    }
+
+    const std::string format = normalize_format(input.format);
+    if (format == "NV12" && input.width == output_width_ && input.height == output_height_) {
+        output = input;
+        output.format = "NV12";
+        output.stride = input.stride > 0 ? input.stride : input.width;
+        output.vertical_stride =
+            input.vertical_stride > 0 ? input.vertical_stride : input.height;
+        last_frame_hardware_ = input.has_single_plane_dma();
+        last_mode_ = input.has_single_plane_dma() ? "BYPASS-DMA" : "BYPASS";
+        return true;
+    }
+
+    VideoFrame decoded;
+    const VideoFrame* source = &input;
+    // 1. 若输入为 MJPEG，则先通过软件或 MPP 解码成 NV12 格式
+    if (format == "MJPEG" || format == "MJPG") {
+        last_mjpeg_input_ = true;
+#if defined(VISIONCAST_ENABLE_RGA) && defined(VISIONCAST_ENABLE_MPP)
+        const bool allow_decoder_dma_output = true;
+#else
+        const bool allow_decoder_dma_output =
+            input.width == output_width_ && input.height == output_height_;
+#endif
+        const std::uint64_t decode_start_us = monotonic_now_us();
+        if (!mjpeg_decoder_.decode(input, decoded, error, allow_decoder_dma_output)) {
+            last_mjpeg_decode_us_ = monotonic_now_us() - decode_start_us;
+            return false;
+        }
+        last_mjpeg_decode_us_ = monotonic_now_us() - decode_start_us;
+        last_mjpeg_hardware_ = mjpeg_decoder_.is_hardware_accelerated();
+        last_mjpeg_dma_output_ = decoded.has_single_plane_dma();
+        if (decoded.format == "NV12" && decoded.width == output_width_ &&
+            decoded.height == output_height_) {
+            output = std::move(decoded);
+            output.format = "NV12";
+            output.stride = output.stride > 0 ? output.stride : output.width;
+            output.vertical_stride =
+                output.vertical_stride > 0 ? output.vertical_stride : output.height;
+            last_frame_hardware_ =
+                output.has_single_plane_dma() || mjpeg_decoder_.is_hardware_accelerated();
+            last_mode_ = output.has_single_plane_dma() ? "BYPASS-DMA" : "BYPASS";
+            return true;
+        }
+        source = &decoded;
+    }
+
+#if defined(VISIONCAST_ENABLE_RGA) && defined(VISIONCAST_ENABLE_MPP)
+    std::string dma_error;
+    if (rga_process_dma_nv12(*source, output_width_, output_height_, output, dma_error)) {
+        last_frame_hardware_ = true;
+        last_mode_ = "RGA-FD";
+        return true;
+    }
+    if (!dma_error.empty()) {
+        if (source->data.empty()) {
+            error = dma_error;
+            return false;
+        }
+        VC_LOG_WARN("rga", dma_error + ", falling back to CPU-visible RGA path");
+        error.clear();
+    }
+#endif
+
+    if (source->data.empty()) {
+        error = "DMA-BUF frame requires RGA fd path for resize/format conversion";
         return false;
     }
 
@@ -235,21 +439,11 @@ bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::str
     output.sequence = input.sequence;
     output.format = "NV12";
     output.data.assign(nv12_size(output_width_, output_height_), 0);
-
-    const std::string format = normalize_format(input.format);
-    VideoFrame decoded;
-    const VideoFrame* source = &input;
-    // 1. 若输入为 MJPEG，则先通过软件或 MPP 解码成 NV12 格式
-    if (format == "MJPEG" || format == "MJPG") {
-        if (!mjpeg_decoder_.decode(input, decoded, error)) {
-            return false;
-        }
-        source = &decoded;
-    }
 #if defined(VISIONCAST_ENABLE_RGA)
     // 2. 尝试使用瑞芯微 RGA 硬件加速接口进行缩放和颜色空间转换
     if (rga_process(*source, output, error)) {
         last_frame_hardware_ = true;
+        last_mode_ = "RGA-VA";
         return true;
     }
     if (!error.empty()) {
@@ -270,6 +464,7 @@ bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::str
 #endif
 
     last_frame_hardware_ = false;
+    last_mode_ = "CPU";
     // 3. Fallback：硬件处理不可用时，使用 CPU 执行软件下采样和缩放
     const std::string source_format = normalize_format(source->format);
     if (source_format == "NV12") {
@@ -301,6 +496,26 @@ bool RgaProcessor::process(const VideoFrame& input, VideoFrame& output, std::str
 
 bool RgaProcessor::is_hardware_accelerated() const {
     return last_frame_hardware_;
+}
+
+std::string RgaProcessor::last_mode() const {
+    return last_mode_;
+}
+
+bool RgaProcessor::last_mjpeg_input() const {
+    return last_mjpeg_input_;
+}
+
+bool RgaProcessor::last_mjpeg_hardware() const {
+    return last_mjpeg_hardware_;
+}
+
+bool RgaProcessor::last_mjpeg_dma_output() const {
+    return last_mjpeg_dma_output_;
+}
+
+std::uint64_t RgaProcessor::last_mjpeg_decode_us() const {
+    return last_mjpeg_decode_us_;
 }
 
 }  // namespace visioncast

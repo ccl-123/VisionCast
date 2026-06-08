@@ -33,8 +33,11 @@ struct MppEncoder::Impl {
     MppApi* mpi = nullptr;
     MppBufferGroup group = nullptr;
     MppEncCfg cfg = nullptr;
+    MppBuffer packet_buffer = nullptr;
+    std::size_t packet_buffer_capacity = 0;
 #endif
     bool opened = false;
+    bool last_input_dma = false;
 };
 
 namespace {
@@ -81,6 +84,17 @@ bool contains_h264_nalu_type(const std::uint8_t* data,
 }
 #endif
 
+std::size_t nv12_storage_size(const VideoFrame& frame) {
+    const int stride = frame.stride > 0 ? frame.stride : frame.width;
+    const int vertical_stride =
+        frame.vertical_stride > 0 ? frame.vertical_stride : frame.height;
+    if (stride <= 0 || vertical_stride <= 0) {
+        return 0;
+    }
+    return static_cast<std::size_t>(stride) *
+           static_cast<std::size_t>(vertical_stride) * 3U / 2U;
+}
+
 }  // namespace
 
 MppEncoder::MppEncoder(VideoConfig video, EncoderConfig encoder)
@@ -123,7 +137,7 @@ bool MppEncoder::open(std::string& error) {
         return false;
     }
 
-    ret = impl_->mpi->control(impl_->ctx, MPP_DEC_GET_CFG, impl_->cfg);
+    ret = impl_->mpi->control(impl_->ctx, MPP_ENC_GET_CFG, impl_->cfg);
     if (ret != MPP_OK) {
         error = mpp_error("MPP_ENC_GET_CFG", ret);
         close();
@@ -206,6 +220,11 @@ void MppEncoder::close() {
         mpp_enc_cfg_deinit(impl_->cfg);
         impl_->cfg = nullptr;
     }
+    if (impl_->packet_buffer != nullptr) {
+        mpp_buffer_put(impl_->packet_buffer);
+        impl_->packet_buffer = nullptr;
+        impl_->packet_buffer_capacity = 0;
+    }
     if (impl_->group != nullptr) {
         mpp_buffer_group_put(impl_->group);
         impl_->group = nullptr;
@@ -222,9 +241,14 @@ std::string MppEncoder::backend_version() {
 #endif
 }
 
+bool MppEncoder::last_input_dma() const {
+    return impl_->last_input_dma;
+}
+
 // 编码单帧 NV12 为 H.264 Packet
 bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::string& error) {
 #if defined(VISIONCAST_ENABLE_MPP)
+    impl_->last_input_dma = false;
     if (!impl_->opened && !open(error)) {
         return false;
     }
@@ -233,21 +257,60 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         return false;
     }
 
-    // 1. 从 DRM 内存组中获取一块物理连续缓冲区
+    // 1. 准备 MPP 输入缓冲区：优先导入 DMA-BUF，失败或无 DMA-BUF 时走旧拷贝路径。
     MppBuffer buffer = nullptr;
-    const MPP_RET buffer_ret = mpp_buffer_get(impl_->group, &buffer, frame.data.size());
-    if (buffer_ret != MPP_OK) {
-        error = mpp_error("mpp_buffer_get", buffer_ret);
+    const std::size_t input_size =
+        !frame.data.empty() ? frame.data.size()
+                            : std::max(nv12_storage_size(frame), frame.dma_bytesused());
+    if (input_size == 0) {
+        error = "invalid NV12 frame size";
         return false;
     }
-    MppBuffer packet_buffer = nullptr;
+    if (frame.has_single_plane_dma()) {
+        const auto& plane = frame.dma->planes.front();
+        if (plane.fd >= 0 && plane.length > 0) {
+            MppBufferInfo info{};
+            info.type = MPP_BUFFER_TYPE_EXT_DMA;
+            info.size = plane.length;
+            info.fd = plane.fd;
+            info.index = static_cast<int>(frame.dma->buffer_index);
+            MPP_RET import_ret = mpp_buffer_import(&buffer, &info);
+            if (import_ret == MPP_OK && plane.offset > 0) {
+                import_ret = mpp_buffer_set_offset(buffer, plane.offset);
+            }
+            if (import_ret != MPP_OK) {
+                if (buffer != nullptr) {
+                    mpp_buffer_put(buffer);
+                    buffer = nullptr;
+                }
+                if (frame.data.empty()) {
+                    error = mpp_error("mpp_buffer_import(NV12 dma)", import_ret);
+                    return false;
+                }
+            } else {
+                impl_->last_input_dma = true;
+            }
+        }
+    }
     MppPacket output_packet = nullptr;
 
-    // 2. 拷贝图像源数据至物理内存区
-    std::memcpy(mpp_buffer_get_ptr(buffer), frame.data.data(), frame.data.size());
-    mpp_buffer_sync_end(buffer);
+    if (buffer == nullptr) {
+        if (frame.data.empty()) {
+            error = "MPP encoder has no CPU-visible NV12 data for fallback";
+            return false;
+        }
+        const MPP_RET buffer_ret = mpp_buffer_get(impl_->group, &buffer, frame.data.size());
+        if (buffer_ret != MPP_OK) {
+            error = mpp_error("mpp_buffer_get", buffer_ret);
+            return false;
+        }
 
-    // 3. 构造 MPP 帧元数据，描述物理缓冲区属性
+        // 拷贝图像源数据至物理内存区
+        std::memcpy(mpp_buffer_get_ptr(buffer), frame.data.data(), frame.data.size());
+        mpp_buffer_sync_end(buffer);
+    }
+
+    // 2. 构造 MPP 帧元数据，描述物理缓冲区属性
     MppFrame mpp_frame = nullptr;
     MPP_RET ret = mpp_frame_init(&mpp_frame);
     if (ret != MPP_OK) {
@@ -265,51 +328,58 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
     mpp_frame_set_pts(mpp_frame, static_cast<RK_S64>(frame.pts_us));
     mpp_frame_set_buffer(mpp_frame, buffer);
 
-    // 4. 为输出的 H.264 码流包预先分配物理内存
+    // 3. 为输出的 H.264 码流包预先分配物理内存
     const std::size_t packet_capacity =
-        std::max<std::size_t>(frame.data.size(), static_cast<std::size_t>(encoder_.bitrate / 8));
-    ret = mpp_buffer_get(impl_->group, &packet_buffer, packet_capacity);
-    if (ret != MPP_OK) {
-        mpp_frame_deinit(&mpp_frame);
-        mpp_buffer_put(buffer);
-        error = mpp_error("mpp_buffer_get(packet)", ret);
-        return false;
+        std::max<std::size_t>(input_size, static_cast<std::size_t>(encoder_.bitrate / 8));
+    if (impl_->packet_buffer == nullptr ||
+        impl_->packet_buffer_capacity < packet_capacity) {
+        if (impl_->packet_buffer != nullptr) {
+            mpp_buffer_put(impl_->packet_buffer);
+            impl_->packet_buffer = nullptr;
+            impl_->packet_buffer_capacity = 0;
+        }
+        ret = mpp_buffer_get(impl_->group, &impl_->packet_buffer, packet_capacity);
+        if (ret != MPP_OK) {
+            mpp_frame_deinit(&mpp_frame);
+            mpp_buffer_put(buffer);
+            error = mpp_error("mpp_buffer_get(packet)", ret);
+            return false;
+        }
+        impl_->packet_buffer_capacity = packet_capacity;
     }
-    ret = mpp_packet_init_with_buffer(&output_packet, packet_buffer);
+    ret = mpp_packet_init_with_buffer(&output_packet, impl_->packet_buffer);
     if (ret != MPP_OK) {
         mpp_frame_deinit(&mpp_frame);
         mpp_buffer_put(buffer);
-        mpp_buffer_put(packet_buffer);
         error = mpp_error("mpp_packet_init_with_buffer", ret);
         return false;
     }
     mpp_packet_set_length(output_packet, 0);
     mpp_meta_set_packet(mpp_frame_get_meta(mpp_frame), KEY_OUTPUT_PACKET, output_packet);
 
-    // 5. 将 YUV 帧送入硬编码器，完成后释放帧描述
+    // 4. 将 YUV 帧送入硬编码器，完成后释放帧描述
     ret = impl_->mpi->encode_put_frame(impl_->ctx, mpp_frame);
     mpp_frame_deinit(&mpp_frame);
-    mpp_buffer_put(buffer);
     if (ret != MPP_OK) {
+        mpp_buffer_put(buffer);
         mpp_packet_deinit(&output_packet);
-        mpp_buffer_put(packet_buffer);
         error = mpp_error("mpi->encode_put_frame", ret);
         return false;
     }
 
-    // 6. 从硬编码器获取编码完成的 H.264 码流包
+    // 5. 从硬编码器获取编码完成的 H.264 码流包
     MppPacket out = nullptr;
     ret = impl_->mpi->encode_get_packet(impl_->ctx, &out);
     if (ret != MPP_OK) {
+        mpp_buffer_put(buffer);
         mpp_packet_deinit(&output_packet);
-        mpp_buffer_put(packet_buffer);
         error = mpp_error("mpi->encode_get_packet", ret);
         return false;
     }
     // 处理 MPP 空帧输出（表示在等待帧组合或没有可用包）
     if (out == nullptr) {
+        mpp_buffer_put(buffer);
         mpp_packet_deinit(&output_packet);
-        mpp_buffer_put(packet_buffer);
         packet = {};
         packet.media_type = MediaType::Video;
         packet.pts_us = frame.pts_us;
@@ -317,7 +387,7 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         return true;
     }
 
-    // 7. 解析数据包，检测 H.264 NALU 类型是否包含关键帧 (IDR = 5)
+    // 6. 解析数据包，检测 H.264 NALU 类型是否包含关键帧 (IDR = 5)
     const auto* pos = static_cast<const std::uint8_t*>(mpp_packet_get_pos(out));
     const std::size_t length = mpp_packet_get_length(out);
     packet = {};
@@ -330,19 +400,19 @@ bool MppEncoder::encode(const VideoFrame& frame, EncodedPacket& packet, std::str
         if (!same_packet) {
             mpp_packet_deinit(&output_packet);
         }
-        mpp_buffer_put(packet_buffer);
+        mpp_buffer_put(buffer);
         return true;
     }
     packet.key_frame = contains_h264_nalu_type(pos, length, 5);
     packet.data.assign(pos, pos + length);
 
-    // 8. 资源回收
+    // 7. 资源回收
     const bool same_packet = out == output_packet;
     mpp_packet_deinit(&out);
     if (!same_packet) {
         mpp_packet_deinit(&output_packet);
     }
-    mpp_buffer_put(packet_buffer);
+    mpp_buffer_put(buffer);
     return true;
 #else
     (void)frame;

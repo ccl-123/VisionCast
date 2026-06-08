@@ -37,6 +37,8 @@ public:
     void close();
     // 编码一帧视频数据，将输入的 VideoFrame 转换为输出的 EncodedPacket
     bool encode(const VideoFrame& frame, EncodedPacket& packet, std::string& error);
+    // Returns true when the latest input frame was imported through DMA-BUF.
+    bool last_input_dma() const;
     // 静态函数，获取底层 MPP 后台版本信息
     static std::string backend_version();
 

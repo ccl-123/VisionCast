@@ -30,11 +30,8 @@ std::size_t start_code_size(const std::vector<std::uint8_t>& data, std::size_t p
     return 0;
 }
 
-// 辅助函数：从输入的字节流中查找所有的 NALU 数据偏移与长度（去除了起始码）
-std::vector<std::pair<std::size_t, std::size_t>> find_annexb_nalus(
-    const std::vector<std::uint8_t>& data) {
-    std::vector<std::pair<std::size_t, std::size_t>> nalus;
-    std::size_t pos = 0;
+std::pair<std::size_t, std::size_t> next_annexb_nalu(const std::vector<std::uint8_t>& data,
+                                                     std::size_t& pos) {
     while (pos < data.size()) {
         const std::size_t sc = start_code_size(data, pos);
         if (sc == 0) {
@@ -47,14 +44,10 @@ std::vector<std::pair<std::size_t, std::size_t>> find_annexb_nalus(
             ++pos;
         }
         if (pos > start) {
-            nalus.emplace_back(start, pos - start);
+            return {start, pos - start};
         }
     }
-    // 如果没有起始码且数据不为空，将其作为一个单一的载荷返回
-    if (nalus.empty() && !data.empty()) {
-        nalus.emplace_back(0, data.size());
-    }
-    return nalus;
+    return {data.size(), 0};
 }
 
 }  // namespace
@@ -63,85 +56,109 @@ RtpPacketizer::RtpPacketizer(std::uint8_t payload_type, std::uint32_t ssrc, std:
     : payload_type_(payload_type), ssrc_(ssrc), mtu_(std::max<std::size_t>(mtu, 256)) {}
 
 std::vector<RtpPacket> RtpPacketizer::packetize(const EncodedPacket& packet) {
-    // 视频需要解析 NALU 并依据 MTU 分片打包；Opus 音频帧直接作为单个 RTP 载荷发送。
-    if (packet.media_type == MediaType::Video) {
-        return packetize_h264(packet);
-    }
-    if (packet.data.empty()) {
-        return {};
-    }
-    return {make_packet(packet.data.data(), packet.data.size(), packet.rtp_timestamp, true)};
+    std::vector<RtpPacket> packets;
+    packetize_each(packet, [&packets](const RtpPacket& rtp) {
+        packets.push_back(rtp);
+        return true;
+    });
+    return packets;
 }
 
-std::vector<RtpPacket> RtpPacketizer::packetize_h264(const EncodedPacket& packet) {
-    std::vector<RtpPacket> out;
-    const auto nalus = find_annexb_nalus(packet.data);
+bool RtpPacketizer::packetize_each(const EncodedPacket& packet,
+                                   const PacketHandler& handler) {
+    // 视频需要解析 NALU 并依据 MTU 分片打包；Opus 音频帧直接作为单个 RTP 载荷发送。
+    if (packet.media_type == MediaType::Video) {
+        return packetize_h264_each(packet, handler);
+    }
+    if (packet.data.empty()) {
+        return true;
+    }
+    RtpPacket rtp;
+    make_packet_into(rtp, packet.data.data(), packet.data.size(), packet.rtp_timestamp, true);
+    return handler(rtp);
+}
+
+bool RtpPacketizer::packetize_h264_each(const EncodedPacket& packet,
+                                        const PacketHandler& handler) {
     const std::size_t max_payload = mtu_ - kRtpHeaderSize;
-    
-    for (std::size_t nalu_index = 0; nalu_index < nalus.size(); ++nalu_index) {
-        const auto [offset, size] = nalus[nalu_index];
+    RtpPacket rtp;
+    std::size_t scan_pos = 0;
+    auto current = next_annexb_nalu(packet.data, scan_pos);
+
+    if (current.second == 0 && !packet.data.empty()) {
+        current = {0, packet.data.size()};
+        scan_pos = packet.data.size();
+    }
+
+    while (current.second > 0) {
+        const auto [offset, size] = current;
+        const auto next = next_annexb_nalu(packet.data, scan_pos);
+        const bool last_nalu = next.second == 0;
         if (size == 0) {
+            current = next;
             continue;
         }
         const std::uint8_t* nalu = packet.data.data() + offset;
-        const bool last_nalu = nalu_index + 1 == nalus.size();
-        
-        // 情况 1：NALU 长度加上 RTP 头部没有超出 MTU 限制，封装为单一 RTP 包
+
         if (size <= max_payload) {
-            out.push_back(make_packet(nalu, size, packet.rtp_timestamp, last_nalu));
+            make_packet_into(rtp, nalu, size, packet.rtp_timestamp, last_nalu);
+            if (!handler(rtp)) {
+                return false;
+            }
+            current = next;
             continue;
         }
 
-        // 情况 2：超出 MTU，按照 RFC 6184 规范进行 FU-A 分片打包
-        // FU indicator 格式： F (1bit) + NRI (2bit) + Type (5bit, 值为 28 表示 FU-A)
         const std::uint8_t nalu_header = nalu[0];
         const std::uint8_t fu_indicator = static_cast<std::uint8_t>((nalu_header & 0xE0U) | 28U);
         const std::uint8_t nalu_type = static_cast<std::uint8_t>(nalu_header & 0x1FU);
-        
-        // 每个 FU-A 分片都需要 1 字节 FU indicator 和 1 字节 FU header
         const std::size_t fragment_payload = max_payload - 2U;
-        std::size_t consumed = 1; // 跳过原 NALU 的 1 字节头部
+        std::size_t consumed = 1;
         bool start = true;
-        
+
         while (consumed < size) {
             const std::size_t chunk = std::min(fragment_payload, size - consumed);
-            std::vector<std::uint8_t> payload;
-            payload.reserve(chunk + 2U);
-            payload.push_back(fu_indicator);
-            
-            // FU header 格式： S (1bit, 开始标志) + E (1bit, 结束标志) + R (1bit, 保留) + Type (5bit, 原 NALU 类型)
             std::uint8_t fu_header = nalu_type;
             if (start) {
-                fu_header |= 0x80U; // 设置 Start 位
+                fu_header |= 0x80U;
             }
             if (consumed + chunk >= size) {
-                fu_header |= 0x40U; // 设置 End 位
+                fu_header |= 0x40U;
             }
-            payload.push_back(fu_header);
-            
-            // 拷入 NALU 部分载荷数据
-            payload.insert(payload.end(), nalu + consumed, nalu + consumed + chunk);
-            
-            // 组装 RTP 报文。当且仅当是最后一包且是原包的最后一个分片时，Marker 标志置为 true
-            out.push_back(make_packet(payload.data(),
-                                      payload.size(),
-                                      packet.rtp_timestamp,
-                                      last_nalu && consumed + chunk >= size));
+
+            make_fua_packet_into(rtp,
+                                 fu_indicator,
+                                 fu_header,
+                                 nalu + consumed,
+                                 chunk,
+                                 packet.rtp_timestamp,
+                                 last_nalu && consumed + chunk >= size);
+            if (!handler(rtp)) {
+                return false;
+            }
             consumed += chunk;
             start = false;
         }
+        current = next;
     }
-    return out;
+    return true;
 }
 
-RtpPacket RtpPacketizer::make_packet(const std::uint8_t* payload,
+void RtpPacketizer::make_packet_into(RtpPacket& packet,
+                                     const std::uint8_t* payload,
                                      std::size_t payload_size,
                                      std::uint32_t timestamp,
                                      bool marker) {
-    RtpPacket packet;
-    packet.marker = marker;
     packet.bytes.resize(kRtpHeaderSize + payload_size);
-    
+    write_header(packet, timestamp, marker);
+
+    // 将载荷数据拷贝到 RTP 头部之后
+    std::copy(payload, payload + payload_size, packet.bytes.begin() + kRtpHeaderSize);
+}
+
+void RtpPacketizer::write_header(RtpPacket& packet, std::uint32_t timestamp, bool marker) {
+    packet.marker = marker;
+
     // 1. 设置 RTP 固定头字段 (12 字节)
     // Byte 0: Version(2bits)=2, Padding(1bit)=0, Extension(1bit)=0, CSRC count(4bits)=0 -> 0x80
     packet.bytes[0] = 0x80U;
@@ -165,10 +182,22 @@ RtpPacket RtpPacketizer::make_packet(const std::uint8_t* payload,
     packet.bytes[9] = static_cast<std::uint8_t>(ssrc_ >> 16);
     packet.bytes[10] = static_cast<std::uint8_t>(ssrc_ >> 8);
     packet.bytes[11] = static_cast<std::uint8_t>(ssrc_);
-    
-    // 2. 将载荷数据拷贝到 RTP 头部之后
-    std::copy(payload, payload + payload_size, packet.bytes.begin() + kRtpHeaderSize);
-    return packet;
+}
+
+void RtpPacketizer::make_fua_packet_into(RtpPacket& packet,
+                                         std::uint8_t fu_indicator,
+                                         std::uint8_t fu_header,
+                                         const std::uint8_t* fragment,
+                                         std::size_t fragment_size,
+                                         std::uint32_t timestamp,
+                                         bool marker) {
+    packet.bytes.resize(kRtpHeaderSize + 2U + fragment_size);
+    write_header(packet, timestamp, marker);
+    packet.bytes[kRtpHeaderSize] = fu_indicator;
+    packet.bytes[kRtpHeaderSize + 1U] = fu_header;
+    std::copy(fragment,
+              fragment + fragment_size,
+              packet.bytes.begin() + kRtpHeaderSize + 2U);
 }
 
 }  // namespace visioncast

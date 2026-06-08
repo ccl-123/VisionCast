@@ -83,17 +83,19 @@ bool AvTransport::send_video(const EncodedPacket& packet, std::string& error) {
     
     // 1. RTP 协议发送分支：对 H.264/H.265 包执行 RTP 打包并逐包发送
     if (config_.stream.protocol == "rtp") {
-        for (const auto& rtp : video_rtp_.packetize(packet)) {
+        return video_rtp_.packetize_each(packet, [this, &error](const RtpPacket& rtp) {
             if (!video_udp_.send(rtp.bytes.data(), rtp.bytes.size(), error)) {
                 return false;
             }
-        }
-        return true;
+            return true;
+        });
     }
     
     // 2. WebRTC 协议发送分支：打包为 RTP 报文并通过 WebRTC 通道（SRTP）传输
     if (config_.stream.protocol == "webrtc") {
-        return webrtc_.push_video_rtp(video_rtp_.packetize(packet), error);
+        return video_rtp_.packetize_each(packet, [this, &error](const RtpPacket& rtp) {
+            return webrtc_.push_video_rtp_packet(rtp, error);
+        });
     }
     
     // 3. RTMP 协议发送分支：将编码后的原始 H.264/H.265 帧推送至 RTMP 推流器
@@ -124,17 +126,19 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
     
     // 2.1 RTP 协议分支：执行 RTP 打包并通过 UDP 音频套接字发送
     if (config_.stream.protocol == "rtp") {
-        for (const auto& rtp : audio_rtp_.packetize(encoded)) {
+        return audio_rtp_.packetize_each(encoded, [this, &error](const RtpPacket& rtp) {
             if (!audio_udp_.send(rtp.bytes.data(), rtp.bytes.size(), error)) {
                 return false;
             }
-        }
-        return true;
+            return true;
+        });
     }
     
     // 2.2 WebRTC 协议分支：发送 RTP 封装好的 Opus 音频报文
     if (config_.stream.protocol == "webrtc") {
-        return webrtc_.push_audio_rtp(audio_rtp_.packetize(encoded), error);
+        return audio_rtp_.packetize_each(encoded, [this, &error](const RtpPacket& rtp) {
+            return webrtc_.push_audio_rtp_packet(rtp, error);
+        });
     }
     
     error = "unsupported stream protocol: " + config_.stream.protocol;

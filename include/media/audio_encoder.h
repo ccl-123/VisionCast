@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -41,6 +42,8 @@ private:
     int opus_channels_ = 0;
     int opus_frame_ms_ = 20;
     std::vector<std::uint8_t> pending_pcm_;
+    std::size_t pending_pcm_offset_ = 0;
+    std::vector<std::int16_t> opus_pcm_;
     std::uint64_t pending_pts_us_ = 0;
 };
 

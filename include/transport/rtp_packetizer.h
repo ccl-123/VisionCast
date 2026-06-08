@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "transport/packetizer.h"
@@ -21,6 +22,8 @@ namespace visioncast {
  */
 class RtpPacketizer : public Packetizer {
 public:
+    using PacketHandler = std::function<bool(const RtpPacket&)>;
+
     /**
      * @brief 构造函数，初始化 RTP 会话基本参数
      * @param payload_type 载荷类型（Payload Type，如 96 表示 H.264，97 表示 AAC 等）
@@ -36,30 +39,26 @@ public:
      */
     std::vector<RtpPacket> packetize(const EncodedPacket& packet) override;
 
-private:
-    /**
-     * @brief 专门针对 H.264 NALU 进行打包
-     * 
-     * 主要策略：
-     * 1. 若单 NALU 大小小于等于 MTU - 12 (RTP Header)，采用单一 NALU 单元打包。
-     * 2. 若超出 MTU，则采用 FU-A (Fragmentation Unit A) 分片封包。
-     * @param packet 包含 H.264 原始 NALU 的编码包
-     * @return 返回生成的 RTP 报文序列
-     */
-    std::vector<RtpPacket> packetize_h264(const EncodedPacket& packet);
+    bool packetize_each(const EncodedPacket& packet, const PacketHandler& handler);
 
-    /**
-     * @brief 组装单个完整的 RTP 报文（包含 12 字节标准 RTP 头部和载荷）
-     * @param payload 指向要写入载荷的数据指针
-     * @param payload_size 载荷的字节长度
-     * @param timestamp 当前报文的 RTP 时间戳
-     * @param marker 是否为帧的最后一个包（设置 Marker 位）
-     * @return 组装好的 RtpPacket 对象
-     */
-    RtpPacket make_packet(const std::uint8_t* payload,
+private:
+    bool packetize_h264_each(const EncodedPacket& packet, const PacketHandler& handler);
+
+    void make_packet_into(RtpPacket& packet,
+                          const std::uint8_t* payload,
                           std::size_t payload_size,
                           std::uint32_t timestamp,
                           bool marker);
+
+    void write_header(RtpPacket& packet, std::uint32_t timestamp, bool marker);
+
+    void make_fua_packet_into(RtpPacket& packet,
+                              std::uint8_t fu_indicator,
+                              std::uint8_t fu_header,
+                              const std::uint8_t* fragment,
+                              std::size_t fragment_size,
+                              std::uint32_t timestamp,
+                              bool marker);
 
     std::uint8_t payload_type_ = 96;  ///< RTP 载荷类型
     std::uint32_t ssrc_ = 0;           ///< 同步源标识符 (SSRC)
@@ -68,4 +67,3 @@ private:
 };
 
 }  // namespace visioncast
-

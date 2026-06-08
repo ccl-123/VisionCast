@@ -90,7 +90,11 @@ std::size_t AudioPipeline::dropped_frames() const {
 void AudioPipeline::worker_loop() {
     std::size_t frames = 0;
     std::size_t sent_bytes = 0;
+    std::uint64_t total_queue_us = 0;
+    std::uint64_t total_send_us = 0;
     std::uint64_t total_latency_us = 0;
+    std::size_t queue_samples = 0;
+    std::size_t latency_samples = 0;
     std::uint64_t last_log = monotonic_now_us(); // 记录上一次打印日志的单调时间戳
 
     while (running_) {
@@ -102,6 +106,13 @@ void AudioPipeline::worker_loop() {
 
         std::string error;
         const std::size_t input_bytes = raw.pcm.size();
+        const std::uint64_t t_send_start = monotonic_now_us();
+        std::uint64_t frame_queue_us = 0;
+        bool frame_has_queue_sample = false;
+        if (raw.pts_us > 0 && t_send_start >= raw.pts_us) {
+            frame_queue_us = t_send_start - raw.pts_us;
+            frame_has_queue_sample = true;
+        }
         
         // 通过传输层（如 RTP/RTSP 封装）发送音频数据帧
         if (!transport_->send_audio(raw, error)) {
@@ -115,9 +126,16 @@ void AudioPipeline::worker_loop() {
             break;
         }
         const std::uint64_t send_done_us = monotonic_now_us();
+        const std::uint64_t frame_send_us = send_done_us - t_send_start;
         sent_bytes += input_bytes;
+        if (frame_has_queue_sample) {
+            total_queue_us += frame_queue_us;
+            ++queue_samples;
+        }
+        total_send_us += frame_send_us;
         if (raw.pts_us > 0 && send_done_us >= raw.pts_us) {
             total_latency_us += send_done_us - raw.pts_us;
+            ++latency_samples;
         }
         ++frames;
 
@@ -128,22 +146,36 @@ void AudioPipeline::worker_loop() {
             const double kbps = static_cast<double>(sent_bytes * 8U) / seconds / 1000.0;
             const double avg_pack_kb =
                 frames > 0 ? (static_cast<double>(sent_bytes) / frames / 1024.0) : 0.0;
+            const double queue_ms =
+                queue_samples > 0
+                    ? (static_cast<double>(total_queue_us) / queue_samples / 1000.0)
+                    : 0.0;
+            const double send_ms =
+                frames > 0 ? (static_cast<double>(total_send_us) / frames / 1000.0) : 0.0;
             const double avg_latency_ms =
-                frames > 0 ? (static_cast<double>(total_latency_us) / frames / 1000.0) : 0.0;
+                latency_samples > 0
+                    ? (static_cast<double>(total_latency_us) / latency_samples / 1000.0)
+                    : 0.0;
 
             std::ostringstream log_str;
             log_str << std::fixed << std::setprecision(2)
-                    << "帧数=" << frames
-                    << " 码率kbps=" << kbps
-                    << " 平均KB=" << avg_pack_kb
-                    << " 延迟ms=" << avg_latency_ms
-                    << " 丢帧=" << raw_queue_.dropped()
+                    << "\n  概览: 帧数=" << frames
+                    << " 码率=" << kbps << "kbps"
+                    << " 平均=" << avg_pack_kb << "KB"
+                    << "\n  耗时: 排队=" << queue_ms << "ms"
+                    << " 发送=" << send_ms << "ms"
+                    << " 总=" << avg_latency_ms << "ms"
+                    << "\n  状态: 丢帧=" << raw_queue_.dropped()
                     << " 原始队列=" << raw_queue_.size();
             VC_LOG_INFO("音频流水线", log_str.str());
 
             frames = 0;
             sent_bytes = 0;
+            total_queue_us = 0;
+            total_send_us = 0;
             total_latency_us = 0;
+            queue_samples = 0;
+            latency_samples = 0;
             last_log = now;
         }
     }

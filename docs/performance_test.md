@@ -1,81 +1,127 @@
-# VisionCast 性能测试文档 (已完工版)
+# VisionCast 性能日志与测试说明
 
-> 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
-> 目标：记录音视频采集、处理、编码、多协议推流在板端闭环测试的实际性能指标与优化经验。
+> 目标：说明运行时性能日志的统计口径、链路分段耗时和板端验证方法。
 
----
+## 1. 测试命令
 
-## 1. 文档目的
+```bash
+./scripts/build/device_build.sh
+cd install/visioncast/scripts/run
+./run_13855_camera.sh webrtc
+./run_13855_camera.sh rtmp
+./run_usb_camera.sh rtp
+```
 
-本文档汇总 VisionCast 最终版本在 ELF-RK3588 开发板上的真实性能测试数据，包括采集帧率、RGA 预处理时延、MPP 硬编码时延、端到端时延、网络传输码率与丢帧状况。
+运行前确认没有旧进程占用设备：
 
----
+```bash
+pgrep -af visioncast
+```
 
-## 2. 测试平台与物理环境
+## 2. 视频日志格式
 
-- **物理板卡**：ELF-RK3588 嵌入式开发板。
-- **系统环境**：Linux (Ubuntu 22.04 aarch64)。
-- **视频输入**：`/dev/video11` (13855 MIPI 摄像头，NV12 采集)。
-- **音频输入**：`hw:1,0` (NAU8822 Codec，双声道采集降采样为单声道)。
-- **流媒体服务**：板端/本地回环部署的 MediaMTX 服务端。
-- **推流目标**：`127.0.0.1` 环回接口及跨设备局域网 IP。
+视频流水线每秒输出一条窗口统计：
 
----
+```text
+[视频流水线]
+  概览: 窗口帧=30 帧率=29.99fps 码率=4000.00kbps 平均=16.30KB
+  路径: 前处理(fd/直通/拷贝)=0/30/0 MPP输入(DMA/COPY)=30/0 MJPEG(hw/sw/dma输出)=30/0/30
+  耗时: 排队=0.20ms 前处理=1.30ms MJPEG=1.25ms 图像处理=0.05ms 编码=3.45ms 传输=0.10ms 总=5.10ms
+  状态: 处理失败=0 编码无输出=0 丢帧=0 原始队列=0
+```
 
-## 3. 已实现的性能指标与测量结果
+字段含义：
 
-经过系统闭环测定，各协议在稳定运行 30 分钟以上的压力测试中指标如下：
+- `窗口帧`：本统计窗口内成功送到传输层的视频帧数。
+- `帧率`：按窗口时间计算的实际发送帧率，单位直接跟在数值后，例如 `29.99fps`。
+- `前处理路径(fd/直通/拷贝)`：RGA fd-to-fd、DMA 直通、CPU/VA 拷贝路径计数。
+- `MPP输入(DMA/COPY)`：MPP 编码输入是 DMA-BUF 导入还是 CPU 拷贝。
+- `MJPEG(hw/sw/dma输出)`：MJPEG 硬解、软解、解码输出 DMA-BUF 的帧数。
+- `码率`：编码后进入传输层的 H.264 payload 码率，单位直接跟在数值后，例如 `4000.00kbps`。
+- `平均`：单个编码包平均大小，单位直接跟在数值后，例如 `16.30KB`。
+- `处理失败`：前处理失败次数，包含无效 MJPEG、RGA/解码失败等。
+- `编码无输出`：MPP 本次编码未返回 packet 的帧数。
+- `丢帧`：原始队列主动丢弃的累计帧数。
 
-### 3.1 核心时间开销与延迟指标
+## 3. 视频耗时口径
 
-| 测量项 | 实际实测范围 | 性能评估与硬件加速说明 |
+`耗时` 行使用 `字段=值ms` 格式，所有值来自同一个 `CLOCK_MONOTONIC` 微秒时钟。
+
+| 字段 | 起止点 | 说明 |
 | --- | --- | --- |
-| **视频采集帧率** | `29.95 ~ 30.00 FPS` | 稳定无抖动，通过锁定 Vertical Blanking 与曝光防止帧率回退 |
-| **RGA 预处理延迟** | `1.5 ~ 3.3 ms` | 使用 RGA im2d 硬件加速进行色彩转换与缩放，CPU 占用极低 |
-| **MPP 硬编码延迟** | `2.1 ~ 6.3 ms` | H.264 Baseline 硬编码性能优异，多帧缓冲延迟为 0 |
-| **音频推流帧率** | `50 ~ 51 fps` | 周期 20ms，音轨推送平稳无断续 |
-| **端到端总延迟** | **200 ms ~ 300 ms** | 包含采集、硬解、RGA、MPP、网络传输及拉流端解码渲染 |
-| **本地异步显示开销**| **0 ms** | 本地预览渲染剥离至异步线程，不给推流主管线引入任何阻塞 |
+| `排队` | 采集 DQBUF 打点 -> 视频工作线程开始处理 | 反映 raw 队列等待。 |
+| `前处理` | `RgaProcessor::process()` 入口 -> 返回 | 包含 MJPEG 解码、RGA、直通判断和 CPU fallback。 |
+| `MJPEG` | `MjpegDecoder::decode()` 入口 -> 返回 | 仅 MJPEG 输入计入；13855 NV12 路径为 0。 |
+| `图像处理` | `前处理 - MJPEG` | 表示解码后的 RGA fd/VA、CPU 转换或直通开销。 |
+| `编码` | `MppEncoder::encode()` 入口 -> 返回 | 包含 MPP 输入导入、硬编码和 packet 取回。 |
+| `传输` | `AvTransport::send_video()` 入口 -> 返回 | 包含 RTP/RTMP/WebRTC 本地封包和发送调用，不是远端网络延迟。 |
+| `总` | 采集 DQBUF 打点 -> `send_video()` 返回 | 本地端到发送完成的总延迟。 |
 
-### 3.2 丢帧与稳定性指标
-- **RTMP 模式**：仅在系统启动初始化缓存时主动丢弃 `3` 帧老帧以防止时延堆积，后续稳定运行期间丢帧率为 `0`。
-- **WebRTC WHIP 模式**：全程丢帧数为 `0`。DTLS 与 ICE 在 10ms 内极速建立，推流稳定。
-- **RTP over UDP 模式**：丢帧数为 `0`。支持接收端离线热插拔，无 ICMP ECONNREFUSED 崩溃异常。
+## 4. 当前视频链路状态
 
----
+13855 MIPI NV12 主路径：
 
-## 4. 各推流协议运行实测数据
+```text
+V4L2 EXPBUF fd
+  -> VideoFrame::dma
+  -> RGA 直通
+  -> MPP H.264 EXT_DMA 输入
+  -> EncodedPacket
+  -> RTP / RTMP / WebRTC
+```
 
-### 4.1 RTMP 推流
-- **测试命令**：`visioncast --protocol rtmp`
-- **码率变化**：稳定在 `3.8 ~ 4.6 Mbps`。
-- **帧率表现**：`30.00 FPS` 稳定不掉帧。
+USB C270 MJPEG 路径：
 
-### 4.2 WebRTC WHIP 推流
-- **测试命令**：`visioncast --protocol webrtc`
-- **DTLS 握手时延**：经 SDP Offer 的 active 角色重写优化后，DTLS 在几毫秒内即可完成握手，避免了旧版本的 Pion 超时挂起。
-- **码率表现**：波动于 `1.7 ~ 5.0 Mbps`。
+```text
+V4L2 bytesused JPEG payload
+  -> MPP MJPEG 解码输入 buffer
+  -> MPP 解码输出 NV12 DMA-BUF
+  -> RGA 直通或 fd-to-fd resize
+  -> MPP H.264 EXT_DMA 输入
+  -> EncodedPacket
+  -> RTP / RTMP / WebRTC
+```
 
-### 4.3 RTP over UDP 推流
-- **测试命令**：`visioncast --protocol rtp`
-- **码率表现**：稳定在 `3.3 ~ 4.8 Mbps`。
-- **稳定性**：即使接收端处于离线状态，发送端依然源源不断推送裸 UDP 包，并自动在工作目录生成对应的播放描述文件 `test.sdp`。
+摄像头到编码器主路径已经避免解码后整帧 NV12 用户态拷贝。仍然存在的拷贝是压缩 JPEG 输入写入 MPP、编码后 packet 提取、以及协议封包。
 
----
+编码后封包阶段已经做了低风险收敛：
 
-## 5. 本地预览显示机制与性能影响
+- RTP/WebRTC：`RtpPacketizer::packetize_each()` 逐包回调发送，不再为每帧先保存完整 `vector<RtpPacket>` 后再遍历发送。
+- RTP/WebRTC H.264：实时发送路径按 Annex-B NALU 流式扫描，不再先构造每帧 NALU offset 列表。
+- RTP FU-A：直接构造最终 RTP packet，避免每个分片先生成临时 payload vector。
+- RTMP：Annex-B NALU 解析改为指针/长度视图，不再为每个 NALU 生成临时 `vector`；AVCC payload 缓冲区在 `RtmpPusher` 内复用。
+- RTP/WebRTC 音频：Opus 输入 PCM 缓存使用 offset 消费，并复用 Opus 输入 scratch buffer，避免每帧前端 `erase` 和临时 PCM vector 分配。
+- RTMP 音频：AAC 输入 PCM 缓存使用 offset 消费，只在缓存全部消费或超过半数已消费时压缩一次。
+- RTMP 仍需要生成 AVCC payload，因为 FLV/RTMP 要 4 字节长度前缀，而 MPP 输出是 Annex-B 起始码格式。
 
-- **痛点**：在 GUI 桌面上如果直接在推流主线程内调用绘制函数，窗口重绘与 X11 交互会严重拖慢视频采集速度，导致帧率断崖式下跌。
-- **解决方案**：在 [display_renderer.cpp](file:///home/elf/open_project/VisionCast/src/media/display_renderer.cpp) 中实现了非阻塞的 X11 异步显示。开启独立子线程利用 OpenCV GUI 控制 X11 图形渲染，与推流主管线通过最大深度为 2 的队列进行图像解耦。
-- **性能评估**：本地窗口缩放、拖动及重绘操作对网络推流的主管线帧率 **完全零影响**。
+## 5. 音频日志格式
 
----
+音频流水线日志：
 
-## 6. 有待优化的性能方向 (Future Optimizations)
+```text
+[音频流水线]
+  概览: 帧数=50 码率=768.00kbps 平均=1.88KB
+  耗时: 排队=0.10ms 发送=0.55ms 总=0.65ms
+  状态: 丢帧=0 原始队列=0
+```
 
-虽然系统已经实现了極佳的延迟表现与高帧率稳定性，但为了进一步压榨 RK3588 硬件潜能，未来仍可开展以下优化：
-1. **打通 DMA-BUF 零拷贝管线**：
-   目前采集输出的用户态映射内存仍需复制给 RGA 转换，之后再复制输入 MPP。后续可以通过导出 V4L2 缓冲区的 DMA-BUF FD 直接传递给 RGA 和 MPP，在硬件单元间实现零拷贝高速流转，将端到端延迟降低至 150ms 级别。
-2. **动态码率自适应控制 (CBR 优化)**：
-   目前 MPP 的 CBR 属于粗粒度分配。后续可以通过 RTCP 接收端报告 (Receiver Report) 中的丢包率和 RTT 实时回算信道带宽，动态重设 MPP 编码的码率参数，防止网络突发性拥堵造成的延迟累积。
+字段含义：
+
+- `帧数`：窗口内发送的音频帧数，20ms 帧通常为 50 或 51。
+- `码率`：当前统计仍按 PCM 输入字节计算，用于观察采集节奏，不等同于 Opus/AAC 码率。
+- `排队`：ALSA 读取打点到音频工作线程开始发送的等待时间。
+- `发送`：`AvTransport::send_audio()` 本地调用耗时。RTP/WebRTC 包含 Opus 编码和 RTP 封包；RTMP 包含推给 FFmpeg RTMP 队列。
+- `总`：ALSA 读取打点到 `send_audio()` 返回的本地总延迟。
+
+## 6. 健康状态判断
+
+- 13855 WebRTC：`前处理路径(fd/直通/拷贝)=0/30/0`，`MPP输入(DMA/COPY)=30/0`，`MJPEG(...)=0/0/0`。
+- USB RTP：`MJPEG(hw/sw/dma输出)=30/0/30`，`前处理路径(fd/直通/拷贝)=0/30/0`，`MPP输入(DMA/COPY)=30/0`。
+- 任一路径：`处理失败=0`、`丢帧=0`、`原始队列=0` 表示处理和发送没有形成积压。
+
+## 7. 2026-06-08 板端验证记录
+
+- USB C270 RTP：稳定 30fps，`MJPEG(hw/sw/dma输出)=30/0/30`，`MPP输入(DMA/COPY)=30/0`，本地总耗时约 5.0ms，处理失败 0。
+- 13855 WebRTC：WHIP/DTLS 连接成功，稳定 30fps，`前处理路径(fd/直通/拷贝)=0/30/0`，`MPP输入(DMA/COPY)=30/0`，传输约 1.1-1.3ms。
+- 13855 RTMP：稳定 30fps，`MPP输入(DMA/COPY)=30/0`，RTMP 传输约 0.3-0.4ms，AAC 音频发送约 0.8-0.9ms；启动阶段可能因 RTMP/AAC 初始化出现少量视频丢帧，稳定后不再增长。

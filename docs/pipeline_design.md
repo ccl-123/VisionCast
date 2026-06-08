@@ -16,21 +16,25 @@
 
 ## 2. 系统总体架构与数据链路
 
-VisionCast 总体链路分为视频链路、音频链路、本地显示链路和网络推流链路。
+VisionCast 总体链路分为视频链路、音频链路、本地显示链路和网络推流链路。当前版本已经把摄像头到 H.264 编码器的主路径改为 DMA-BUF/硬件缓冲传递，协议封包仍保留必要的 CPU 可见编码包拷贝。
 
 ```text
-[VideoCapture] (13855 / C270) ──┬──> [DisplayRenderer] (异步 OpenCV 窗口渲染)
-                                └──> [RgaProcessor] (RGA im2d 尺寸/格式转换)
-                                          │
-                                          ▼
-                                     [MppEncoder] (MPP H.264 硬编码)
-                                          │
-                                          ▼
-                                    [AvTransport] (多协议推送抽象层)
-                                          │
-                                          ├─> [WebRtcPusher] (WebRTC WHIP)
-                                          ├─> [RtmpPusher] (FFmpeg RTMP)
-                                          └─> [UdpSender] (RTP over UDP 裸流)
+[VideoCapture] (13855 NV12 / C270 MJPEG)
+     │
+     ▼
+[RgaProcessor] (MJPEG 解码、RGA fd/VA、直通或 CPU fallback)
+     │
+     ├──> [DisplayRenderer] (仅 CPU 可见帧异步预览，DMA-only 主路径跳过)
+     │
+     ▼
+[MppEncoder] (MPP H.264 硬编码，优先 EXT_DMA 输入)
+     │
+     ▼
+[AvTransport] (多协议推送抽象层)
+     │
+     ├─> [WebRtcPusher] (RTP -> SRTP / WHIP)
+     ├─> [RtmpPusher] (Annex-B -> AVCC -> FLV/RTMP)
+     └─> [UdpSender] (RTP over UDP 裸流)
 
 [AudioCapture] (NAU8822 hw:1,0) ────> [AudioEncoder] (Opus)
                                           │
@@ -49,8 +53,28 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 
 ### 3.2 调试与备用输入：USB C270 摄像头
 - **物理路径**：USB C270 → `/dev/video21` (UVC)。
-- **图像格式**：抓取 MJPEG 画面，通过 MPP MJPEG 解码器或 libjpeg-turbo 软解还原为 NV12 格式。
+- **图像格式**：抓取 MJPEG 压缩帧，先按 `DQBUF.bytesused` 校验并裁剪完整 JPEG，再通过 MPP MJPEG 解码器还原为 NV12。
+- **解码输出**：主路径使用 MPP DRM buffer 输出 NV12 DMA-BUF，直接进入 RGA fd 路径或 MPP 编码器 EXT_DMA 输入；只有 MPP 不可用或失败时才走 libjpeg/CPU 可见 fallback。
 - **降级保护**：当 13855 摄像头无法打开或采集异常时，系统自动平滑切换至备用摄像头输入。
+
+### 3.3 当前视频主链路
+
+13855 MIPI NV12：
+
+```text
+V4L2 EXPBUF fd -> VideoFrame::dma -> RGA 直通 -> MPP EXT_DMA 输入 -> H.264
+```
+
+USB C270 MJPEG：
+
+```text
+V4L2 bytesused JPEG -> MPP MJPEG 解码输入
+  -> MPP 解码输出 NV12 DMA-BUF
+  -> RGA 直通或 fd-to-fd resize
+  -> MPP EXT_DMA 输入 -> H.264
+```
+
+MJPEG 解码的输入、输出、fallback 和性能日志字段见 [mjpeg_decode_flow.md](file:///home/elf/open_project/VisionCast/docs/mjpeg_decode_flow.md)。
 
 ---
 
@@ -64,10 +88,13 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 
 ## 5. 视频预处理设计 (RGA)
 
-预处理由 Rockchip RGA 硬件加速单元完成，避免 CPU 参与格式和像素拷贝：
-1. **尺寸缩放**：将输入帧大小统一缩放为 `1280x720`（或配置的分辨率）。
-2. **色彩转换**：若是 YUYV/MJPEG 解码出的其他格式，通过 `im2d_api` 转换为 MPP 编码器所需的目标 `NV12`。
-3. **性能开销**：im2d 硬件加速耗时稳定在 `1.5 ~ 3.3 ms`。
+预处理由 `RgaProcessor` 统一调度，但它不等同于纯 RGA 耗时：
+1. **MJPEG 解码**：USB C270 输入先进入 MPP MJPEG 解码，解码耗时在性能日志中单独统计为 `MJPEG`。
+2. **直通**：如果输入或解码输出已经是目标尺寸 NV12，则不调用 RGA，直接把 DMA-BUF 交给 MPP 编码器。
+3. **RGA fd-to-fd**：如果 DMA-BUF NV12 需要缩放，使用 RGA fd 输入和 MPP/DRM fd 输出。
+4. **RGA VA / CPU fallback**：仅在不支持 DMA-BUF 或硬件路径失败时使用 CPU 可见数据。
+
+日志中的 `前处理路径(fd/直通/拷贝)` 分别对应 RGA fd-to-fd、DMA/CPU 直通、RGA VA 或 CPU fallback。
 
 ---
 
@@ -78,6 +105,7 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 - **码率控制**：固定码率 (CBR) 控制，默认配置为 4Mbps，码率波动范围稳定。
 - **GOP 大小**：固定设为 30。
 - **低延迟优化**：启用 MPP 内部低延迟模式，视频帧随到随编，即刻输出，编码耗时稳定在 `2.1 ~ 6.3 ms`。
+- **输入路径**：优先通过 `MPP_BUFFER_TYPE_EXT_DMA` 导入单平面 NV12 DMA-BUF；不满足条件时才退回 CPU 拷贝输入。
 
 ---
 
@@ -104,7 +132,7 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 - **物理实现**：链接 `libdatachannel` 建立 PeerConnection 传输音视频流，客户端通过 HTTP POST 向 WHIP 服务端推送 SDP Offer。
 - **回环与握手优化**：本地/回环测试时，将 libdatachannel 套接字强制绑定到 `127.0.0.1` 物理回环；同时，将 SDP Offer 中的 `a=setup:actpass` 强制覆写为 `a=setup:active`，强迫客户端主动发出 `ClientHello` 以进行 DTLS 协商，将 DTLS 协商延时控制在 5ms 级。
 - **音视频数据链路**：
-  - **视频链路**：`13855 MIPI CSI 采集 (/dev/video11)` -> `RgaProcessor NV12格式转换` -> `MppEncoder H.264硬编码` -> `libdatachannel封装为RTP并以SRTP加密发送` -> `主机MediaMTX接收` -> `浏览器 WHEP 播放`。
+  - **视频链路**：`13855 MIPI CSI 采集 (/dev/video11)` -> `DMA-BUF NV12 直通或RGA fd处理` -> `MppEncoder H.264硬编码` -> `RtpPacketizer` -> `libdatachannel以SRTP发送` -> `主机MediaMTX接收` -> `浏览器 WHEP 播放`。
   - **音频链路**：`nau8822 hw:1,0 采集 (48kHz S16_LE)` -> `AudioCapture输出 PCM` -> `AudioEncoder编码为Opus` -> `RtpPacketizer封装(PT=111)` -> `libdatachannel以SRTP加密发送` -> `主机MediaMTX` -> `浏览器 WHEP 播放`。
 - **数据压缩规格**：
   - **视频**：H.264 Baseline Profile，完全禁用 B 帧，CBR 控制，GOP=30。
@@ -112,9 +140,9 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 
 ### 9.2 RTMP
 - **物理实现**：采用 FFmpeg 动态加载库 (`libavformat.so` 等) 建立 RTMP 传输层通道，向指定的 RTMP 服务端发布流。
-- **字节流重组**：在发送前由 `RtmpPusher` 拦截 MPP 产生的 Annex-B NAL 字节流，切分并剥离 `0x00000001` 起始码，重组为符合 FLV 规范的 AVCC 4字节长度前缀数据包后写入封装器。
+- **字节流重组**：在发送前由 `RtmpPusher` 拦截 MPP 产生的 Annex-B NAL 字节流，切分并剥离 `0x00000001` 起始码，重组为符合 FLV 规范的 AVCC 4字节长度前缀数据包后写入封装器。当前 NALU 解析使用指针/长度视图，AVCC payload 缓冲区在推流器内复用，避免每帧重复生成 per-NALU 临时 vector。
 - **音视频数据链路**：
-  - **视频链路**：`13855 MIPI CSI 采集` -> `RgaProcessor转换` -> `MppEncoder H.264编码` -> `RtmpPusher转换为AVCC包` -> `FFmpeg FLV容器封装` -> `RTMP over TCP推送` -> `主机MediaMTX` -> `ffplay拉流`。
+  - **视频链路**：`13855 MIPI CSI 采集` -> `DMA-BUF NV12 直通或RGA fd处理` -> `MppEncoder H.264编码` -> `RtmpPusher转换为AVCC包` -> `FFmpeg FLV容器封装` -> `RTMP over TCP推送` -> `主机MediaMTX` -> `ffplay拉流`。
   - **音频链路**：`nau8822 hw:1,0 采集` -> `均值混音单声道 PCM` -> `FFmpeg重采样并软编码为AAC-LC` -> `FLV容器封装` -> `RTMP over TCP推送` -> `主机MediaMTX` -> `ffplay拉流`。
 - **数据压缩规格**：
   - **视频**：H.264 Baseline Profile，AVCC 格式封装。
@@ -124,8 +152,9 @@ VisionCast 总体链路分为视频链路、音频链路、本地显示链路和
 - **物理实现**：创建标准 UDP 套接字，将音视频 RTP 封包分别向目标 IP/端口（默认视频端口 5004，音频端口 5006）进行无连接的主动推送。
 - **SDP描述文件**：运行时自动在工作目录生成对应的播放描述文件 `test.sdp`，以指明拉流端所需的负载类型和端口。
 - **空挂断容错**：在 `UdpSender::send` 中拦截 `ECONNREFUSED` 异常，当拉流端不在线或异常退出时，推流服务依然能保持运行，支持拉流端的随时热插拔。
+- **封包优化**：RTP 使用逐包回调接口，包生成后立即发送；FU-A 分片直接构造最终 RTP packet，避免临时 payload vector 和每帧 packet 列表。
 - **音视频数据链路**：
-  - **视频链路**：`13855 MIPI CSI 采集` -> `RgaProcessor` -> `MppEncoder H.264编码` -> `RtpPacketizer封包(按RFC 6184分片为FU-A)` -> `UDP 发送(端口5004)` -> `主机 ffplay(解析sdp)播放`。
+  - **视频链路**：`13855 MIPI CSI 采集` -> `DMA-BUF NV12 直通或RGA fd处理` -> `MppEncoder H.264编码` -> `RtpPacketizer封包(按RFC 6184分片为FU-A)` -> `UDP 发送(端口5004)` -> `主机 ffplay(解析sdp)播放`。
   - **音频链路**：`nau8822 hw:1,0 采集` -> `PCM` -> `AudioEncoder编码为Opus` -> `RtpPacketizer封装(Payload Type 111)` -> `UDP 发送(端口5006)` -> `主机 ffplay(解析sdp)播放`。
 - **数据压缩规格**：
   - **视频**：H.264 Baseline Profile，RTP 动态负载类型 `96`。
@@ -210,6 +239,7 @@ VisionCast/
 │   ├── audio_nau8822_flow.md           # nau8822 音频捕获链路
 │   ├── device_probe.md                 # 板端设备枚举参考
 │   ├── performance_test.md             # 性能时延统计日志
+│   ├── mjpeg_decode_flow.md            # USB MJPEG 解码链路说明
 │   ├── issue_record.md                 # 联调过程 Bug 解决记录
 │   └── multi_protocol_test_guide.md    # 多协议推拉流实战测试教程
 │
@@ -233,8 +263,8 @@ VisionCast/
 
 ## 12. 有待优化的地方 (Future Optimizations)
 
-1. **DMA-BUF 零拷贝链路打通**：
-   当前数据从 V4L2 到 RGA 再到 MPP 的流程中仍包含了用户空间缓冲的映射和复制。未来应利用 `V4L2` 导出的 DMA-BUF FD 直接传递给 `RGA` 导入，再将转换后的 FD 传给 `MPP`。这样可以彻底消除 CPU 的数据拷贝，将端到端延迟降低到 150ms 以内。
+1. **编码后 packet view 化**：
+   当前已收敛 RTP/WebRTC 逐包发送、RTP H.264 流式 NALU 扫描、RTMP NALU span 解析和音频 PCM offset 消费。剩余主要拷贝是 MPP 输出写入 `EncodedPacket::data`、RTP 最终 packet payload、WebRTC/SRTP 内部发送，以及 RTMP 必需的 AVCC payload 重组。
 2. **动态码率与拥塞控制 (Congestion Control)**：
    目前推流仅使用固定的 CBR 码率。未来可引入 WebRTC/RTCP 反馈机制，读取客户端返回的丢包率和 RTT 延迟，实时动态调整 MPP 编码器的 `Bitrate` 目标。
 3. **Opus 自适应优化**：

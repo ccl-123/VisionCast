@@ -57,6 +57,7 @@ public:
      * @return 成功发送返回 true，失败返回 false
      */
     bool push_video_rtp(const std::vector<RtpPacket>& packets, std::string& error);
+    bool push_video_rtp_packet(const RtpPacket& packet, std::string& error);
 
     /**
      * @brief 通过 WebRTC 音频通道（SRTP）推送 RTP 音频报文序列
@@ -65,6 +66,7 @@ public:
      * @return 成功发送返回 true，失败返回 false
      */
     bool push_audio_rtp(const std::vector<RtpPacket>& packets, std::string& error);
+    bool push_audio_rtp_packet(const RtpPacket& packet, std::string& error);
 
 private:
     struct Impl;                     ///< Pimpl 具体实现类，封装具体的 WebRTC SDK（如 WebRTC 官方 SDK 或 libdatachannel 等）逻辑
@@ -75,4 +77,3 @@ private:
 };
 
 }  // namespace visioncast
-

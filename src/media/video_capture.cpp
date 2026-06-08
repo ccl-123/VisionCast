@@ -17,9 +17,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <utility>
@@ -35,9 +37,20 @@ struct MmapBuffer {
     struct Plane {
         void* start = nullptr;
         std::size_t length = 0;
+        int dmabuf_fd = -1;
     };
     std::vector<Plane> planes;
 };
+
+struct CaptureBufferState {
+    int fd = -1;
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    std::vector<std::uint32_t> plane_counts;
+    std::mutex mutex;
+    bool active = false;
+};
+
+bool is_mplane_type(v4l2_buf_type type);
 
 std::string char_array_to_string(const unsigned char* data, std::size_t size) {
     return std::string(reinterpret_cast<const char*>(data),
@@ -69,6 +82,43 @@ std::uint32_t fourcc_from_string(const std::string& format) {
 std::string errno_text(const std::string& prefix) {
     std::ostringstream out;
     out << prefix << ": " << std::strerror(errno);
+    return out.str();
+}
+
+bool find_complete_mjpeg_payload(const std::uint8_t* data,
+                                 std::size_t size,
+                                 std::size_t& payload_size) {
+    payload_size = 0;
+    if (data == nullptr || size < 4 || data[0] != 0xFF || data[1] != 0xD8) {
+        return false;
+    }
+    if (data[size - 2] == 0xFF && data[size - 1] == 0xD9) {
+        payload_size = size;
+        return true;
+    }
+    for (std::size_t pos = size - 2; pos > 1; --pos) {
+        if (data[pos] == 0xFF && data[pos + 1] == 0xD9) {
+            payload_size = pos + 2;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string mjpeg_boundary_message(const std::uint8_t* data,
+                                   std::size_t size,
+                                   std::uint64_t sequence) {
+    std::ostringstream out;
+    out << "invalid MJPEG boundary sequence=" << sequence
+        << " size=" << size;
+    if (data != nullptr && size >= 2) {
+        out << " head=" << static_cast<int>(data[0])
+            << "," << static_cast<int>(data[1]);
+    }
+    if (data != nullptr && size >= 4) {
+        out << " tail=" << static_cast<int>(data[size - 2])
+            << "," << static_cast<int>(data[size - 1]);
+    }
     return out.str();
 }
 
@@ -113,12 +163,61 @@ void enumerate_formats(int fd,
 void unmap_buffers(std::vector<MmapBuffer>& buffers) {
     for (auto& buffer : buffers) {
         for (auto& plane : buffer.planes) {
+            if (plane.dmabuf_fd >= 0) {
+                close(plane.dmabuf_fd);
+                plane.dmabuf_fd = -1;
+            }
             if (plane.start != nullptr && plane.start != MAP_FAILED) {
                 munmap(plane.start, plane.length);
             }
         }
     }
     buffers.clear();
+}
+
+void close_exported_fds(std::vector<MmapBuffer>& buffers) {
+    for (auto& buffer : buffers) {
+        for (auto& plane : buffer.planes) {
+            if (plane.dmabuf_fd >= 0) {
+                close(plane.dmabuf_fd);
+                plane.dmabuf_fd = -1;
+            }
+        }
+    }
+}
+
+void deactivate_capture_state(const std::shared_ptr<CaptureBufferState>& state) {
+    if (state == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->active = false;
+}
+
+void requeue_capture_buffer(const std::weak_ptr<CaptureBufferState>& weak_state,
+                            std::uint32_t index) {
+    const auto state = weak_state.lock();
+    if (state == nullptr) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (!state->active || state->fd < 0 || index >= state->plane_counts.size()) {
+        return;
+    }
+
+    v4l2_buffer buf{};
+    v4l2_plane planes[VIDEO_MAX_PLANES]{};
+    buf.type = state->type;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = index;
+    if (is_mplane_type(state->type)) {
+        buf.m.planes = planes;
+        buf.length = state->plane_counts[index];
+    }
+    if (ioctl(state->fd, VIDIOC_QBUF, &buf) != 0) {
+        VC_LOG_WARN("video-capture", errno_text("VIDIOC_QBUF dmabuf release"));
+    }
 }
 
 bool is_mplane_type(v4l2_buf_type type) {
@@ -433,6 +532,8 @@ void VideoCapture::capture_loop() {
         // 6. 遍历并建立 mmap 用户地址空间映射 (VIDIOC_QUERYBUF)
         std::vector<MmapBuffer> buffers(req.count);
         bool map_ok = true;
+        bool dmabuf_export_ok = true;
+        std::string dmabuf_export_error;
         for (std::uint32_t i = 0; i < req.count; ++i) {
             v4l2_buffer buf{};
             v4l2_plane planes[VIDEO_MAX_PLANES]{};
@@ -462,6 +563,19 @@ void VideoCapture::capture_loop() {
                     map_ok = false;
                     break;
                 }
+                v4l2_exportbuffer expbuf{};
+                expbuf.type = type;
+                expbuf.index = i;
+                expbuf.plane = p;
+                expbuf.flags = O_CLOEXEC;
+                if (ioctl(fd, VIDIOC_EXPBUF, &expbuf) == 0) {
+                    buffers[i].planes[p].dmabuf_fd = expbuf.fd;
+                } else {
+                    dmabuf_export_ok = false;
+                    if (dmabuf_export_error.empty()) {
+                        dmabuf_export_error = errno_text("VIDIOC_EXPBUF " + device);
+                    }
+                }
             }
             if (!map_ok) {
                 break;
@@ -471,6 +585,24 @@ void VideoCapture::capture_loop() {
             unmap_buffers(buffers);
             close(fd);
             continue;
+        }
+        if (!dmabuf_export_ok) {
+            close_exported_fds(buffers);
+            VC_LOG_WARN("video-capture",
+                        dmabuf_export_error +
+                            ", DMA-BUF zero-copy disabled for this device");
+        } else {
+            VC_LOG_INFO("video-capture", "DMA-BUF export enabled for " + device);
+        }
+
+        auto capture_state = std::make_shared<CaptureBufferState>();
+        capture_state->fd = fd;
+        capture_state->type = type;
+        capture_state->active = true;
+        capture_state->plane_counts.reserve(buffers.size());
+        for (const auto& buffer : buffers) {
+            capture_state->plane_counts.push_back(
+                static_cast<std::uint32_t>(buffer.planes.size()));
         }
 
         // 7. 将映射好缓冲区的空闲帧全部入队 (VIDIOC_QBUF)
@@ -517,6 +649,10 @@ void VideoCapture::capture_loop() {
                                          " fmt=" + fourcc_to_string(active_fourcc));
         finish_initialization(true);
         std::uint64_t sequence = 0;
+        bool warned_unsupported_dmabuf_planes = false;
+        bool warned_mjpeg_dma_input_disabled = false;
+        bool warned_invalid_mjpeg_boundary = false;
+        bool warned_mjpeg_tail_trimmed = false;
         const auto set_runtime_error = [this](const std::string& message) {
             std::lock_guard<std::mutex> lock(state_mutex_);
             error_ = message;
@@ -582,27 +718,129 @@ void VideoCapture::capture_loop() {
                                           buf.length,
                                           static_cast<std::uint32_t>(buffers[buf.index].planes.size()))
                                      : 1U;
+            std::vector<std::size_t> plane_offsets(plane_count, 0);
+            std::vector<std::size_t> plane_bytesused(plane_count, 0);
+            bool skip_frame = false;
             for (std::uint32_t p = 0; p < plane_count; ++p) {
                 const auto& mapped = buffers[buf.index].planes[p];
-                const std::size_t data_offset = is_mplane_type(type) ? planes[p].data_offset : 0U;
-                const std::size_t bytesused = is_mplane_type(type) ? planes[p].bytesused
-                                                                   : buf.bytesused;
+                const std::size_t data_offset =
+                    is_mplane_type(type) ? planes[p].data_offset : 0U;
+                const std::size_t bytesused =
+                    is_mplane_type(type) ? planes[p].bytesused : buf.bytesused;
                 if (data_offset > mapped.length) {
-                    continue;
+                    skip_frame = true;
+                    break;
                 }
-                const std::size_t used =
-                    std::min(bytesused, mapped.length) > data_offset
-                        ? std::min(bytesused, mapped.length) - data_offset
-                        : 0U;
-                const auto* ptr = static_cast<const std::uint8_t*>(mapped.start) + data_offset;
-                frame.data.insert(frame.data.end(), ptr, ptr + used);
+                const std::size_t capped = std::min(bytesused, mapped.length);
+                std::size_t used = capped > data_offset ? capped - data_offset : 0U;
+                if (frame.format == "MJPEG" && p == 0) {
+                    const auto* ptr =
+                        static_cast<const std::uint8_t*>(mapped.start) + data_offset;
+                    std::size_t payload_size = 0;
+                    if (!find_complete_mjpeg_payload(ptr, used, payload_size)) {
+                        if (!warned_invalid_mjpeg_boundary) {
+                            VC_LOG_WARN("video-capture",
+                                        mjpeg_boundary_message(ptr, used, frame.sequence));
+                            warned_invalid_mjpeg_boundary = true;
+                        }
+                        skip_frame = true;
+                        break;
+                    }
+                    if (payload_size < used && !warned_mjpeg_tail_trimmed) {
+                        std::ostringstream msg;
+                        msg << "trimmed MJPEG payload from bytesused=" << used
+                            << " to jpeg_size=" << payload_size;
+                        VC_LOG_WARN("video-capture", msg.str());
+                        warned_mjpeg_tail_trimmed = true;
+                    }
+                    used = payload_size;
+                }
+                plane_offsets[p] = data_offset;
+                plane_bytesused[p] = used;
             }
+            if (skip_frame) {
+                if (ioctl(fd, VIDIOC_QBUF, &buf) != 0) {
+                    const std::string runtime_error = errno_text("VIDIOC_QBUF");
+                    set_runtime_error(runtime_error);
+                    VC_LOG_ERROR("video-capture", runtime_error);
+                    break;
+                }
+                continue;
+            }
+            const bool downstream_dma_capable =
+                plane_count == 1U && frame.format == "NV12";
+            const bool can_use_dmabuf =
+                dmabuf_export_ok && downstream_dma_capable &&
+                plane_count == buffers[buf.index].planes.size();
+            if (dmabuf_export_ok && frame.format == "MJPEG" &&
+                !warned_mjpeg_dma_input_disabled) {
+                VC_LOG_WARN("video-capture",
+                            "MJPEG compressed DMA-BUF input disabled; "
+                            "MPP decoder uses CPU-visible packet input");
+                warned_mjpeg_dma_input_disabled = true;
+            }
+            if (dmabuf_export_ok && frame.format == "NV12" &&
+                !downstream_dma_capable &&
+                !warned_unsupported_dmabuf_planes) {
+                VC_LOG_WARN("video-capture",
+                            "DMA-BUF disabled for " + frame.format +
+                                " because downstream supports single-plane buffers only");
+                warned_unsupported_dmabuf_planes = true;
+            }
+            if (can_use_dmabuf) {
+                auto dma = std::make_shared<VideoDmaBuffer>();
+                dma->buffer_index = buf.index;
+                dma->planes.reserve(plane_count);
+                bool dup_ok = true;
+                for (std::uint32_t p = 0; p < plane_count; ++p) {
+                    const auto& mapped = buffers[buf.index].planes[p];
+                    const std::size_t data_offset = plane_offsets[p];
+                    const std::size_t bytesused = plane_bytesused[p];
+                    if (mapped.dmabuf_fd < 0 || data_offset > mapped.length) {
+                        dup_ok = false;
+                        break;
+                    }
+                    const int frame_fd = dup(mapped.dmabuf_fd);
+                    if (frame_fd < 0) {
+                        dup_ok = false;
+                        break;
+                    }
+                    VideoDmaPlane plane;
+                    plane.fd = frame_fd;
+                    plane.offset = data_offset;
+                    plane.bytesused = bytesused;
+                    plane.length = mapped.length;
+                    dma->planes.push_back(plane);
+                }
+                if (dup_ok && !dma->planes.empty()) {
+                    const std::weak_ptr<CaptureBufferState> weak_state = capture_state;
+                    const std::uint32_t buffer_index = buf.index;
+                    dma->release = [weak_state, buffer_index] {
+                        requeue_capture_buffer(weak_state, buffer_index);
+                    };
+                    frame.dma = std::move(dma);
+                }
+            }
+
+            if (!frame.has_dma()) {
+                for (std::uint32_t p = 0; p < plane_count; ++p) {
+                    const auto& mapped = buffers[buf.index].planes[p];
+                    const std::size_t data_offset = plane_offsets[p];
+                    const std::size_t used = plane_bytesused[p];
+                    if (data_offset > mapped.length) {
+                        continue;
+                    }
+                    const auto* ptr = static_cast<const std::uint8_t*>(mapped.start) + data_offset;
+                    frame.data.insert(frame.data.end(), ptr, ptr + used);
+                }
+            }
+            const bool used_dmabuf = frame.has_dma();
             if (callback_) {
                 callback_(std::move(frame));
             }
 
-            // 处理完后，将缓冲区重新入队列以备下次循环填充 (VIDIOC_QBUF)
-            if (ioctl(fd, VIDIOC_QBUF, &buf) != 0) {
+            // 拷贝路径处理完后立即 QBUF；DMA-BUF 路径由 VideoDmaBuffer 析构时归还。
+            if (!used_dmabuf && ioctl(fd, VIDIOC_QBUF, &buf) != 0) {
                 const std::string runtime_error = errno_text("VIDIOC_QBUF");
                 set_runtime_error(runtime_error);
                 VC_LOG_ERROR("video-capture", runtime_error);
@@ -611,6 +849,7 @@ void VideoCapture::capture_loop() {
         }
 
         // 10. 停止采集并清理设备资源 (VIDIOC_STREAMOFF)
+        deactivate_capture_state(capture_state);
         if (ioctl(fd, VIDIOC_STREAMOFF, &type) != 0) {
             VC_LOG_WARN("video-capture", errno_text("VIDIOC_STREAMOFF"));
         }
