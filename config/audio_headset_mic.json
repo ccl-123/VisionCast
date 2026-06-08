@@ -2,6 +2,7 @@
   "audio": {
     "device": "hw:1,0",
     "sample_rate": 48000,
+    "capture_channels": 2,
     "channels": 2,
     "format": "S16_LE",
     "frame_ms": 20

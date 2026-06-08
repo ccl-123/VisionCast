@@ -3,7 +3,7 @@
  * @brief VisionCast 音频采集实现文件
  * @details 实现了基于 ALSA (Advanced Linux Sound Architecture) 的音频数据捕获。
  *          利用运行时动态链接（dlopen/dlsym）方式加载 `libasound.so.2`，规避编译期硬链接依赖。
- *          支持多通道音频采集与自动降混（如双声道降混为单声道）。
+ *          支持独立配置采集声道与输出声道，并按需执行降混或声道复制。
  */
 
 #include "media/audio_capture.h"
@@ -393,7 +393,13 @@ void AudioCapture::capture_loop() {
     const unsigned int sample_rate = static_cast<unsigned int>(config_.sample_rate);
     const unsigned int output_channels =
         static_cast<unsigned int>(config_.channels > 0 ? config_.channels : 1);
-    unsigned int capture_channels = output_channels;
+    unsigned int capture_channels =
+        static_cast<unsigned int>(config_.capture_channels > 0
+                                      ? config_.capture_channels
+                                      : config_.channels);
+    if (capture_channels == 0) {
+        capture_channels = output_channels;
+    }
     snd_pcm_uframes_t period_frames =
         static_cast<snd_pcm_uframes_t>((sample_rate * static_cast<unsigned int>(config_.frame_ms)) / 1000U);
     if (period_frames == 0) {
@@ -408,7 +414,7 @@ void AudioCapture::capture_loop() {
                           sample_rate,
                           1,
                           static_cast<unsigned int>(config_.frame_ms * 1000));
-    // 如果请求 mono 被声卡拒绝，尝试以 stereo (双声道) 启动捕获并在软件层进行降混
+    // 如果请求 mono 被声卡拒绝且输出需要 mono，尝试以 stereo 启动捕获并在软件层降混
     if (ret < 0 && output_channels == 1) {
         capture_channels = 2;
         ret = alsa.set_params(handle,

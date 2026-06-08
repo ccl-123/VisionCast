@@ -45,7 +45,8 @@ struct VideoConfig {
 struct AudioConfig {
     std::string device = "hw:1,0";              ///< ALSA 捕获设备名称，默认为 "hw:1,0"（声卡1，设备0）
     int sample_rate = 48000;                    ///< 音频采样率；RTP/WebRTC Opus 支持 8000/12000/16000/24000/48000 Hz
-    int channels = 1;                           ///< 声道数，1 表示单声道，2 表示双声道/立体声
+    int channels = 1;                           ///< 输出/推流声道数，1 表示单声道，2 表示双声道/立体声
+    int capture_channels = 0;                   ///< ALSA 采集声道数；0 表示跟随 channels，可配置为 1 或 2
     std::string format = "S16_LE";              ///< ALSA 音频采样格式，默认为 Signed 16-bit Little Endian（有符号16位小端）
     int frame_ms = 20;                          ///< 单个音频帧的时间长度（毫秒级，常用 20ms，决定单次读取的采样数）
 };

@@ -355,6 +355,7 @@ void apply_audio_config(const std::string& object, AudioConfig& audio) {
     if (auto value = string_value(object, "device")) audio.device = *value;
     if (auto value = int_value(object, "sample_rate")) audio.sample_rate = *value;
     if (auto value = int_value(object, "channels")) audio.channels = *value;
+    if (auto value = int_value(object, "capture_channels")) audio.capture_channels = *value;
     if (auto value = string_value(object, "format")) audio.format = *value;
     if (auto value = int_value(object, "frame_ms")) audio.frame_ms = *value;
 }
@@ -465,6 +466,13 @@ bool validate_config(const VisionCastConfig& config, std::string& error) {
         return false;
     }
 
+    if (config.audio.capture_channels != 0 &&
+        config.audio.capture_channels != 1 &&
+        config.audio.capture_channels != 2) {
+        error = "audio.capture_channels must be 0, 1 or 2";
+        return false;
+    }
+
     if (config.audio.frame_ms <= 0) {
         error = "audio.frame_ms must be positive";
         return false;
@@ -506,6 +514,8 @@ std::string summarize_config(const VisionCastConfig& config) {
     out << '\n';
     out << "Audio: device=" << config.audio.device
         << ", sample_rate=" << config.audio.sample_rate
+        << ", capture_channels="
+        << (config.audio.capture_channels > 0 ? config.audio.capture_channels : config.audio.channels)
         << ", channels=" << config.audio.channels
         << ", format=" << config.audio.format
         << ", frame_ms=" << config.audio.frame_ms << '\n';

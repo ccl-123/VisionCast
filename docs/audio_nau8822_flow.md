@@ -60,7 +60,7 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 ## 5. VisionCast 音频链路与编码实现
 
 音频数据从硬件捕获到网络传输的流程已全面跑通：
-- **混音降采样**：由于 ALSA 硬件层在某些驱动配置下拒绝直接开启单声道 (Mono) 采集，`AudioCapture` 在启动时自动开启双声道 (Stereo) 采集，并在 PCM 帧读取出队后，进行 **左右声道均值混音**，平滑合并为一路单声道 PCM 帧。
+- **声道选择**：`audio.capture_channels` 控制 ALSA 请求采集声道数，`audio.channels` 控制最终推流声道数。配置为 `capture_channels=2, channels=2` 时保留双声道；配置为 `capture_channels=2, channels=1` 时，`AudioCapture` 进行左右声道均值混音并输出单声道 PCM。
 - **采集时钟**：在 ALSA PCM 读取完成的瞬间打上 `CLOCK_MONOTONIC` 微秒级单调时钟 PTS。
 - **编码器实现**：
   - **Opus 编码**：RTP 与 WebRTC 共用 `AudioEncoder`，使用 20ms 帧、48 kHz RTP 时钟和带内 FEC。
@@ -74,9 +74,9 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
      │
      ▼
 [ALSA hw:1,0]
-     │ (S16_LE 双声道采集)
+     │ (S16_LE，声道数跟随 audio.capture_channels)
      ▼
-[AudioCapture] (左右声道均值混音 -> 单声道 PCM)
+[AudioCapture] (按 audio.channels 透传/降混/复制)
      │ (打 CLOCK_MONOTONIC PTS)
      ▼
 [AvTransport]
@@ -91,7 +91,8 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 | 参数 | 实际配置值 |
 | --- | --- |
 | 采样率 | `48000 Hz` |
-| 声道数 | `1` (双声道采集，应用层降采样单声道输出) |
+| 采集声道数 | `audio.capture_channels`，默认配置为 `2` |
+| 推流声道数 | `audio.channels`，`1` 为单声道，`2` 为双声道/立体声 |
 | 采样格式 | `S16_LE` |
 | 帧周期 | `20 ms` |
 | 实现编码 | RTP/WebRTC: Opus；RTMP: AAC |
@@ -136,5 +137,5 @@ RTP/WebRTC 的 Opus 编码缓存采用 offset 消费并复用 Opus 输入 scratc
 ## 9. 已验证的结论
 
 1. **唯一物理录音通道**：板载 NAU8822 的 `hw:1,0` 节点是当前系统唯一可用的 PCM 录音设备。
-2. **多声道混音适配**：系统已具备极佳的 ALSA 硬件兼容性，能够自动处理 Mono/Stereo 的降级协商并保证单声道 PCM 的顺畅输出。
+2. **多声道混音适配**：系统已具备 ALSA 硬件兼容性，能够按 JSON 配置处理 Mono/Stereo 采集与推流输出，并在需要时执行双声道到单声道混音。
 3. **音画同步保真**：基于 `CLOCK_MONOTONIC` 微秒级 PTS 的透传，配合视频硬编码管道，端到端推流的音视频完全同步。
