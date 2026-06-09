@@ -59,11 +59,11 @@ add_executable(visioncast
     src/pipeline/av_pipeline.cpp
     src/pipeline/pipeline_manager.cpp
     src/pipeline/video_pipeline.cpp
-    src/transport/rtp_packetizer.cpp
+    src/transport/rtp/rtp_packetizer.cpp
     src/transport/av_transport.cpp
-    src/transport/udp_sender.cpp
-    src/transport/rtmp_pusher.cpp
-    src/transport/webrtc_pusher.cpp
+    src/transport/rtp/udp_sender.cpp
+    src/transport/rtmp/rtmp_pusher.cpp
+    src/transport/webrtc/webrtc_pusher.cpp
 )
 
 target_include_directories(visioncast

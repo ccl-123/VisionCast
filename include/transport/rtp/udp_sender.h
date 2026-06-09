@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <string>
 
-#include "transport/network_sender.h"
+#include "transport/rtp/network_sender.h"
 
 namespace visioncast {
 

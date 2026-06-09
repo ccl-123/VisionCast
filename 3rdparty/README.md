@@ -109,7 +109,7 @@
 
 项目用途：
 
-- `src/transport/rtmp_pusher.cpp` 从首个 H.264 关键帧提取 SPS/PPS，生成 AVCDecoderConfigurationRecord。
+- `src/transport/rtmp/rtmp_pusher.cpp` 从首个 H.264 关键帧提取 SPS/PPS，生成 AVCDecoderConfigurationRecord。
 - 视频以 H.264 写入 FLV，音频由 48 kHz S16_LE PCM 编码为 AAC 后写入同一 RTMP 流。
 - 默认推流地址为 `rtmp://192.168.137.1:1935/live/stream`。
 - 当前 WebRTC 发送代码已完全重构为使用 FFmpeg 8.1.1 原生 `whip` muxer，摒弃了旧版第三方 libdatachannel 库以降低包体积和内存开销。

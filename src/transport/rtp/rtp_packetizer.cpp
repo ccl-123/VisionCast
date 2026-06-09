@@ -8,7 +8,7 @@
  * 3. 构造包含 Version、Marker、Payload Type、Sequence Number、Timestamp 及 SSRC 的 RFC 3550 标准 12 字节 RTP 头部。
  */
 
-#include "transport/rtp_packetizer.h"
+#include "transport/rtp/rtp_packetizer.h"
 
 #include <algorithm>
 #include <cstddef>

@@ -21,10 +21,10 @@
 #include "media/audio_encoder.h"
 #include "media/audio_frame.h"
 #include "media/encoded_packet.h"
-#include "transport/rtmp_pusher.h"
-#include "transport/rtp_packetizer.h"
-#include "transport/udp_sender.h"
-#include "transport/webrtc_pusher.h"
+#include "transport/rtmp/rtmp_pusher.h"
+#include "transport/rtp/rtp_packetizer.h"
+#include "transport/rtp/udp_sender.h"
+#include "transport/webrtc/webrtc_pusher.h"
 
 namespace visioncast {
 
