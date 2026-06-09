@@ -486,6 +486,10 @@ bool is_supported_video_codec(const std::string& codec) {
     return codec == "h264" || codec == "h265";
 }
 
+bool is_webrtc_protocol(const std::string& protocol) {
+    return protocol == "webrtc";
+}
+
 }  // namespace
 
 void replace_all(std::string& str, const std::string& from, const std::string& to) {
@@ -570,6 +574,21 @@ bool validate_config(const VisionCastConfig& config, std::string& error) {
         }
         if (!is_supported_opus_frame_ms(config.audio.frame_ms)) {
             error = "RTP/WebRTC Opus audio.frame_ms must be one of 5, 10, 20, 40, 60";
+            return false;
+        }
+    }
+
+    if (is_webrtc_protocol(config.stream.protocol)) {
+        if (config.encoder.video_codec != "h264") {
+            error = "WebRTC WHIP currently supports only h264 video with FFmpeg 8.1.1";
+            return false;
+        }
+        if (config.audio.sample_rate != 48000) {
+            error = "WebRTC WHIP Opus audio.sample_rate must be 48000";
+            return false;
+        }
+        if (config.audio.channels != 2) {
+            error = "WebRTC WHIP Opus audio.channels must be 2";
             return false;
         }
     }

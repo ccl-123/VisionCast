@@ -96,8 +96,6 @@ else()
     message(WARNING "Rockchip MPP headers/library were not found; video encoding will be disabled")
 endif()
 
-
-
 if (VISIONCAST_TARGET_RK3588
     AND EXISTS "${FFMPEG_INC_DIR}/libavformat/avformat.h"
     AND EXISTS "${AVFORMAT_LIB}"
@@ -161,6 +159,18 @@ install(DIRECTORY scripts/run scripts/board DESTINATION scripts
 )
 install(PROGRAMS scripts/fix_freq_rk3588.sh DESTINATION scripts)
 
+if (EXISTS "${OPUS_LIB_DIR}")
+    install(DIRECTORY "${OPUS_LIB_DIR}/"
+        DESTINATION lib
+        FILES_MATCHING PATTERN "libopus.so*"
+    )
+    install(FILES
+        "${THIRDPARTY_DIR}/opus/COPYING"
+        "${THIRDPARTY_DIR}/opus/README.md"
+        DESTINATION share/licenses/opus
+    )
+endif()
+
 if (EXISTS "${FFMPEG_LIB_DIR}")
     install(DIRECTORY "${FFMPEG_LIB_DIR}/"
         DESTINATION lib
@@ -169,6 +179,7 @@ if (EXISTS "${FFMPEG_LIB_DIR}")
             PATTERN "libavcodec.so*"
             PATTERN "libavutil.so*"
             PATTERN "libswresample.so*"
+            PATTERN "libssl.so*"
+            PATTERN "libcrypto.so*"
     )
 endif()
-

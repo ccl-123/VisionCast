@@ -27,6 +27,8 @@ OPENSSL_DEV_DIR="${ROOT_DIR}/build/webrtc_deps/openssl_arm64_dev"
 BUILD_OUT_DIR="${WORK_DIR}/ffmpeg-8.1.1-install"
 INSTALLED_AVFORMAT="${INSTALL_DIR}/lib/aarch64/libavformat.so.62.12.101"
 INSTALLED_VERSION_HEADER="${INSTALL_DIR}/include/libavutil/ffversion.h"
+INSTALLED_LIBSSL="${INSTALL_DIR}/lib/aarch64/libssl.so.3"
+INSTALLED_LIBCRYPTO="${INSTALL_DIR}/lib/aarch64/libcrypto.so.3"
 
 CC="${CC:-aarch64-linux-gnu-gcc}"
 CXX="${CXX:-aarch64-linux-gnu-g++}"
@@ -34,15 +36,12 @@ CXX="${CXX:-aarch64-linux-gnu-g++}"
 ffmpeg_whip_ready() {
     [[ -f "${INSTALLED_AVFORMAT}" ]] &&
         [[ -f "${INSTALLED_VERSION_HEADER}" ]] &&
+        [[ -f "${INSTALLED_LIBSSL}" ]] &&
+        [[ -f "${INSTALLED_LIBCRYPTO}" ]] &&
         grep -q 'FFMPEG_VERSION "8.1.1"' "${INSTALLED_VERSION_HEADER}" &&
         strings "${INSTALLED_AVFORMAT}" | grep -q "WHIP muxer" &&
         strings "${INSTALLED_AVFORMAT}" | grep -q "dtls_active"
 }
-
-if [[ "${FORCE_FFMPEG_REBUILD:-0}" != "1" ]] && ffmpeg_whip_ready; then
-    echo "FFmpeg 8.1.1 WHIP 已就绪，跳过重新编译。"
-    exit 0
-fi
 
 mkdir -p "${WORK_DIR}"
 
@@ -64,6 +63,19 @@ if [[ ! -f "${OPENSSL_DEV_DIR}/root/usr/include/aarch64-linux-gnu/openssl/openss
 fi
 OPENSSL_DEV_ROOT="${OPENSSL_DEV_DIR}/root"
 OPENSSL_LIB_DIR="${OPENSSL_DEV_ROOT}/usr/lib/aarch64-linux-gnu"
+
+copy_openssl_runtime() {
+    mkdir -p "${INSTALL_DIR}/lib/aarch64"
+    cp -Lf "${OPENSSL_LIB_DIR}/libssl.so.3" "${INSTALLED_LIBSSL}"
+    cp -Lf "${OPENSSL_LIB_DIR}/libcrypto.so.3" "${INSTALLED_LIBCRYPTO}"
+}
+
+copy_openssl_runtime
+
+if [[ "${FORCE_FFMPEG_REBUILD:-0}" != "1" ]] && ffmpeg_whip_ready; then
+    echo "FFmpeg 8.1.1 WHIP 已就绪，跳过重新编译。"
+    exit 0
+fi
 
 # 2. Prepare a pristine FFmpeg 8.1.1 source tree.
 if [[ ! -f "${FFMPEG_TAR}" ]]; then
@@ -139,6 +151,7 @@ mkdir -p "${INSTALL_DIR}/include"
 
 cp -r "${BUILD_OUT_DIR}/include/"* "${INSTALL_DIR}/include/"
 cp -d "${BUILD_OUT_DIR}/lib/"*.so* "${INSTALL_DIR}/lib/aarch64/"
+copy_openssl_runtime
 
 echo "========================================"
 FFMPEG_VERSION_HEADER="${INSTALL_DIR}/include/libavutil/ffversion.h"

@@ -3,7 +3,7 @@
  * @brief VisionCast WebRTC WHIP 推流客户端模块实现文件
  * 
  * 本文件使用项目内置 FFmpeg 8.x 共享库完成 WHIP/WebRTC 封装与传输。
- * 视频硬编码输出的 Annex-B H.264/H.265 码流与 Opus 音频包，直接写入 FFmpeg whip muxer，
+ * 视频硬编码输出的 Annex-B H.264 码流与 Opus 音频包，直接写入 FFmpeg whip muxer，
  * 由其自动完成 HTTP SDP 协商、STUN 绑定、DTLS 握手和 SRTP 加密传输。
  */
 
@@ -221,6 +221,11 @@ bool setup_video_stream(WebRtcPusher::Impl& impl,
                         VideoCodec codec,
                         const std::vector<WhipNaluSpan>& nalus,
                         std::string& error) {
+    if (codec != VideoCodec::H264) {
+        error = "WebRTC WHIP currently supports only H264 video";
+        return false;
+    }
+
     impl.video_stream = avformat_new_stream(impl.format, nullptr);
     if (impl.video_stream == nullptr) {
         error = "avformat_new_stream(video) failed";
@@ -230,8 +235,7 @@ bool setup_video_stream(WebRtcPusher::Impl& impl,
     impl.video_stream->time_base = AVRational{1, 1000000}; // 微秒基准
     AVCodecParameters* parameters = impl.video_stream->codecpar;
     parameters->codec_type = AVMEDIA_TYPE_VIDEO;
-    parameters->codec_id =
-        codec == VideoCodec::H265 ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+    parameters->codec_id = AV_CODEC_ID_H264;
     parameters->width = video.width;
     parameters->height = video.height;
     parameters->bit_rate = encoder.bitrate;
