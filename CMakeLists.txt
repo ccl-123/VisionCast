@@ -63,6 +63,7 @@ add_executable(visioncast
     src/transport/av_transport.cpp
     src/transport/rtp/udp_sender.cpp
     src/transport/rtmp/rtmp_pusher.cpp
+    src/transport/rtsp/rtsp_pusher.cpp
     src/transport/webrtc/webrtc_pusher.cpp
 )
 
@@ -112,7 +113,7 @@ if (VISIONCAST_TARGET_RK3588
         ${SWRESAMPLE_LIB}
     )
 else()
-    message(WARNING "AArch64 FFmpeg development files were not found; RTMP and WHIP modes will be disabled")
+    message(WARNING "AArch64 FFmpeg development files were not found; RTMP, WHIP and RTSP modes will be disabled")
 endif()
 
 if (VISIONCAST_TARGET_RK3588 AND EXISTS "${RGA_INC_DIR}/im2d.h" AND EXISTS "${RGA_LIB}")
@@ -139,7 +140,7 @@ else()
         target_include_directories(visioncast SYSTEM PRIVATE ${OPUS_SYSTEM_INC_DIR})
         target_link_libraries(visioncast PRIVATE ${OPUS_SYSTEM_LIB})
     else()
-        message(FATAL_ERROR "Opus headers/library are required because RTP/WebRTC audio is Opus-only")
+        message(FATAL_ERROR "Opus headers/library are required because RTP/WebRTC/RTSP audio is Opus-only")
     endif()
 endif()
 

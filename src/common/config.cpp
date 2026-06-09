@@ -440,6 +440,10 @@ void apply_stream_config(const std::string& object, StreamConfig& stream) {
     if (auto value = string_value(object, "protocol")) stream.protocol = *value;
     if (auto value = string_value(object, "rtmp_url")) stream.rtmp_url = *value;
     if (auto value = string_value(object, "webrtc_url")) stream.webrtc_url = *value;
+    if (auto value = string_value(object, "rtsp_url")) stream.rtsp_url = *value;
+    if (auto value = string_value(object, "rtsp_transport")) {
+        stream.rtsp_transport = lower_ascii(*value);
+    }
     if (auto value = string_value(object, "server_ip")) stream.server_ip = *value;
     if (auto value = int_value(object, "video_port")) stream.video_port = *value;
     if (auto value = int_value(object, "audio_port")) stream.audio_port = *value;
@@ -463,7 +467,7 @@ std::string bool_text(bool value) {
 }
 
 bool is_rtp_opus_protocol(const std::string& protocol) {
-    return protocol == "rtp" || protocol == "webrtc";
+    return protocol == "rtp" || protocol == "webrtc" || protocol == "rtsp";
 }
 
 bool is_supported_opus_sample_rate(int sample_rate) {
@@ -488,6 +492,10 @@ bool is_supported_video_codec(const std::string& codec) {
 
 bool is_webrtc_protocol(const std::string& protocol) {
     return protocol == "webrtc";
+}
+
+bool is_supported_rtsp_transport(const std::string& transport) {
+    return transport == "udp" || transport == "tcp";
 }
 
 }  // namespace
@@ -569,13 +577,19 @@ bool validate_config(const VisionCastConfig& config, std::string& error) {
 
     if (is_rtp_opus_protocol(config.stream.protocol)) {
         if (!is_supported_opus_sample_rate(config.audio.sample_rate)) {
-            error = "RTP/WebRTC Opus audio.sample_rate must be one of 8000, 12000, 16000, 24000, 48000";
+            error = "RTP/WebRTC/RTSP Opus audio.sample_rate must be one of 8000, 12000, 16000, 24000, 48000";
             return false;
         }
         if (!is_supported_opus_frame_ms(config.audio.frame_ms)) {
-            error = "RTP/WebRTC Opus audio.frame_ms must be one of 5, 10, 20, 40, 60";
+            error = "RTP/WebRTC/RTSP Opus audio.frame_ms must be one of 5, 10, 20, 40, 60";
             return false;
         }
+    }
+
+    if (config.stream.protocol == "rtsp" &&
+        !is_supported_rtsp_transport(config.stream.rtsp_transport)) {
+        error = "stream.rtsp_transport must be udp or tcp";
+        return false;
     }
 
     if (is_webrtc_protocol(config.stream.protocol)) {
@@ -631,6 +645,8 @@ std::string summarize_config(const VisionCastConfig& config) {
     out << "Stream: protocol=" << config.stream.protocol
         << ", rtmp_url=" << config.stream.rtmp_url
         << ", webrtc_url=" << config.stream.webrtc_url
+        << ", rtsp_url=" << config.stream.rtsp_url
+        << ", rtsp_transport=" << config.stream.rtsp_transport
         << ", server_ip=" << config.stream.server_ip
         << ", video_port=" << config.stream.video_port
         << ", audio_port=" << config.stream.audio_port

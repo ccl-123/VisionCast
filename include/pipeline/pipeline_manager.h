@@ -64,7 +64,7 @@ public:
     int run_stream();
 
     /**
-     * @brief 生成用于 RTSP/RTP 单播/组播传输的 SDP 配置文件
+     * @brief 生成用于 RTP 单播/组播传输的 SDP 配置文件
      * @param error 如果生成或写入文件失败，返回错误描述信息
      * @return 写入成功返回 true，否则返回 false
      */

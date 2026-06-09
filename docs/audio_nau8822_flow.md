@@ -63,7 +63,7 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 - **声道选择**：`audio.capture_channels` 控制 ALSA 请求采集声道数，`audio.channels` 控制最终推流声道数。配置为 `capture_channels=2, channels=2` 时保留双声道；配置为 `capture_channels=2, channels=1` 时，`AudioCapture` 进行左右声道均值混音并输出单声道 PCM。
 - **采集时钟**：在 ALSA PCM 读取完成的瞬间打上 `CLOCK_MONOTONIC` 微秒级单调时钟 PTS。
 - **编码器实现**：
-  - **Opus 编码**：RTP 与 WebRTC 共用 `AudioEncoder`，使用 20ms 帧、48 kHz RTP 时钟和带内 FEC。
+  - **Opus 编码**：RTP、WebRTC 与 RTSP 共用 `AudioEncoder`，使用 20ms 帧、48 kHz RTP 时钟和带内 FEC。
   - **AAC 编码**：RTMP 使用 FFmpeg AAC 编码器并封装为 FLV。
 
 ```text
@@ -80,8 +80,8 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
      │ (打 CLOCK_MONOTONIC PTS)
      ▼
 [AvTransport]
-     ├─ RTP/WebRTC -> [AudioEncoder] Opus -> RTP/SRTP
-     └─ RTMP       -> [RtmpPusher] AAC -> FLV
+     ├─ RTP/WebRTC/RTSP -> [AudioEncoder] Opus -> RTP/SRTP/RTSP
+     └─ RTMP            -> [RtmpPusher] AAC -> FLV
 ```
 
 ---
@@ -95,7 +95,7 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 | 推流声道数 | `audio.channels`，`1` 为单声道，`2` 为双声道/立体声 |
 | 采样格式 | `S16_LE` |
 | 帧周期 | `20 ms` |
-| 实现编码 | RTP/WebRTC: Opus；RTMP: AAC |
+| 实现编码 | RTP/WebRTC/RTSP: Opus；RTMP: AAC |
 | 默认设备 | `hw:1,0` |
 
 ---
@@ -112,11 +112,11 @@ card 1: rockchipnau8822 [rockchip-nau8822], device 0
 ```
 
 - `排队`：ALSA 读取完成打点到音频工作线程开始处理的等待时间。
-- `发送`：`AvTransport::send_audio()` 本地调用耗时。RTP/WebRTC 包含 Opus 编码、RTP 封包和发送调用；RTMP 包含推给 FFmpeg RTMP 链路。
+- `发送`：`AvTransport::send_audio()` 本地调用耗时。RTP/WebRTC/RTSP 包含 Opus 编码和协议封包发送调用；RTMP 包含推给 FFmpeg RTMP 链路。
 - `总`：ALSA 读取完成打点到 `send_audio()` 返回的本地总延迟。
 - `码率`：当前按 PCM 输入字节计算，用于确认采集节奏，不等同于 Opus/AAC 实际网络码率。
 
-RTP/WebRTC 的 Opus 编码缓存采用 offset 消费并复用 Opus 输入 scratch buffer，避免每个 20ms 包都搬移剩余 PCM 或重新分配转换缓冲。RTMP 的 AAC 输入缓存同样采用 offset 消费，只在缓存已消费完或超过半数时压缩一次。
+RTP/WebRTC/RTSP 的 Opus 编码缓存采用 offset 消费并复用 Opus 输入 scratch buffer，避免每个 20ms 包都搬移剩余 PCM 或重新分配转换缓冲。RTMP 的 AAC 输入缓存同样采用 offset 消费，只在缓存已消费完或超过半数时压缩一次。
 
 ---
 

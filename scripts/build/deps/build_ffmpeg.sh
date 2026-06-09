@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Build FFmpeg 8.1.1 with OpenSSL and the native WHIP muxer.
+# Build FFmpeg 8.1.1 with OpenSSL and the native WHIP/RTSP muxers.
 #
 # Output:
 #   3rdparty/ffmpeg/include/libavcodec/*.h
@@ -33,14 +33,21 @@ INSTALLED_LIBCRYPTO="${INSTALL_DIR}/lib/aarch64/libcrypto.so.3"
 CC="${CC:-aarch64-linux-gnu-gcc}"
 CXX="${CXX:-aarch64-linux-gnu-g++}"
 
-ffmpeg_whip_ready() {
+has_binary_string() {
+    local file="$1"
+    local text="$2"
+    grep -a -q "${text}" "${file}"
+}
+
+ffmpeg_streaming_ready() {
     [[ -f "${INSTALLED_AVFORMAT}" ]] &&
         [[ -f "${INSTALLED_VERSION_HEADER}" ]] &&
         [[ -f "${INSTALLED_LIBSSL}" ]] &&
         [[ -f "${INSTALLED_LIBCRYPTO}" ]] &&
         grep -q 'FFMPEG_VERSION "8.1.1"' "${INSTALLED_VERSION_HEADER}" &&
-        strings "${INSTALLED_AVFORMAT}" | grep -q "WHIP muxer" &&
-        strings "${INSTALLED_AVFORMAT}" | grep -q "dtls_active"
+        has_binary_string "${INSTALLED_AVFORMAT}" "WHIP muxer" &&
+        has_binary_string "${INSTALLED_AVFORMAT}" "RTSP muxer" &&
+        has_binary_string "${INSTALLED_AVFORMAT}" "dtls_active"
 }
 
 mkdir -p "${WORK_DIR}"
@@ -72,8 +79,8 @@ copy_openssl_runtime() {
 
 copy_openssl_runtime
 
-if [[ "${FORCE_FFMPEG_REBUILD:-0}" != "1" ]] && ffmpeg_whip_ready; then
-    echo "FFmpeg 8.1.1 WHIP 已就绪，跳过重新编译。"
+if [[ "${FORCE_FFMPEG_REBUILD:-0}" != "1" ]] && ffmpeg_streaming_ready; then
+    echo "FFmpeg 8.1.1 WHIP/RTSP 已就绪，跳过重新编译。"
     exit 0
 fi
 
@@ -113,7 +120,7 @@ echo "Configuring FFmpeg..."
         --enable-openssl \
         --enable-network \
         --enable-protocol='rtmp,tcp,http,https,tls,udp,rtp,srtp,dtls' \
-        --enable-muxer='flv,whip,rtp' \
+        --enable-muxer='flv,whip,rtp,rtsp' \
         --enable-encoder='aac' \
         --enable-parser='aac,h264,hevc' \
         --enable-demuxer='flv' \
@@ -134,11 +141,15 @@ if [[ -z "${STAGED_AVFORMAT}" ]]; then
     echo "FFmpeg build did not produce libavformat.so" >&2
     exit 1
 fi
-if ! strings "${STAGED_AVFORMAT}" | grep -q "WHIP muxer"; then
+if ! has_binary_string "${STAGED_AVFORMAT}" "WHIP muxer"; then
     echo "Built libavformat does not contain the WHIP muxer" >&2
     exit 1
 fi
-if ! strings "${STAGED_AVFORMAT}" | grep -q "dtls_active"; then
+if ! has_binary_string "${STAGED_AVFORMAT}" "RTSP muxer"; then
+    echo "Built libavformat does not contain the RTSP muxer" >&2
+    exit 1
+fi
+if ! has_binary_string "${STAGED_AVFORMAT}" "dtls_active"; then
     echo "Built libavformat does not contain the WHIP DTLS options" >&2
     exit 1
 fi
@@ -158,5 +169,5 @@ FFMPEG_VERSION_HEADER="${INSTALL_DIR}/include/libavutil/ffversion.h"
 if [[ -f "${FFMPEG_VERSION_HEADER}" ]]; then
     cat "${FFMPEG_VERSION_HEADER}"
 fi
-echo "FFmpeg 8.1.1 with native WHIP muxer built successfully."
+echo "FFmpeg 8.1.1 with native WHIP/RTSP muxers built successfully."
 echo "========================================"

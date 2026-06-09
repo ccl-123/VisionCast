@@ -201,10 +201,11 @@ bool PipelineManager::write_sdp_file(std::string& error) const {
 }
 
 int PipelineManager::run_stream() {
-    // 支持协议的完整性检测，包括 rtp, rtmp, webrtc
+    // 支持协议的完整性检测，包括 rtp, rtmp, webrtc, rtsp
     if (config_.stream.protocol != "rtp" &&
         config_.stream.protocol != "rtmp" &&
-        config_.stream.protocol != "webrtc") {
+        config_.stream.protocol != "webrtc" &&
+        config_.stream.protocol != "rtsp") {
         VC_LOG_ERROR("pipeline", "unsupported stream protocol=" + config_.stream.protocol);
         return 1;
     }
@@ -224,8 +225,12 @@ int PipelineManager::run_stream() {
                         std::to_string(config_.stream.audio_port));
     } else if (config_.stream.protocol == "rtmp") {
         VC_LOG_INFO("pipeline", "RTMP push target=" + config_.stream.rtmp_url);
-    } else {
+    } else if (config_.stream.protocol == "webrtc") {
         VC_LOG_INFO("pipeline", "WebRTC WHIP push target=" + config_.stream.webrtc_url);
+    } else {
+        VC_LOG_INFO("pipeline",
+                    "RTSP push target=" + config_.stream.rtsp_url +
+                        " transport=" + config_.stream.rtsp_transport);
     }
 
     // 注册信号处理器以捕获 Ctrl+C 或系统的 kill 命令，确保能够正常清理硬件上下文

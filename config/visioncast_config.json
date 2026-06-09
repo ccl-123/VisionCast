@@ -1,6 +1,6 @@
 {
-  "//comment_1": "首选使用 webrtc 协议进行低延迟推流，其次支持 rtmp 和 rtp 协议。可在 protocol 中配置。",
-  "//comment_2": "WebRTC 使用 webrtc_url，RTMP 使用 rtmp_url，RTP 使用 server_ip/video_port/audio_port。",
+  "//comment_1": "首选使用 webrtc 协议进行低延迟推流，其次支持 rtsp、rtmp 和 rtp 协议。可在 protocol 中配置。",
+  "//comment_2": "WebRTC 使用 webrtc_url，RTSP 使用 rtsp_url/rtsp_transport，RTMP 使用 rtmp_url，RTP 使用 server_ip/video_port/audio_port。",
   "//comment_3": "运行脚本固定选择 video_profiles 中的摄像头：run_13855_camera.sh 使用 mipi_13855，run_usb_camera.sh 使用 usb_c270。",
   "video_profile": "mipi_13855",
   "video_profiles": {
@@ -54,6 +54,8 @@
     "protocol": "webrtc",
     "rtmp_url": "rtmp://192.168.137.1:1936/live/stream",
     "webrtc_url": "http://192.168.137.1:8891/live/stream/whip",
+    "rtsp_url": "rtsp://192.168.137.1:8554/live/stream",
+    "rtsp_transport": "udp",
     "server_ip": "192.168.137.1",
     "video_port": 5004,
     "audio_port": 5006,

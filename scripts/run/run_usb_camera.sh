@@ -31,6 +31,12 @@ fi
 if [[ -n "${WEBRTC_URL:-}" ]]; then
     ARGS+=(--webrtc-url "${WEBRTC_URL}")
 fi
+if [[ -n "${RTSP_URL:-}" ]]; then
+    ARGS+=(--rtsp-url "${RTSP_URL}")
+fi
+if [[ -n "${RTSP_TRANSPORT:-}" ]]; then
+    ARGS+=(--rtsp-transport "${RTSP_TRANSPORT}")
+fi
 if [[ -n "${SERVER_IP:-}" ]]; then
     ARGS+=(--server-ip "${SERVER_IP}")
 fi

@@ -2,7 +2,7 @@
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588
-> 目的：记录板端音视频设备枚举结果，作为 V4L2、ALSA、RGA、MPP、RTMP/WebRTC 开发与配置的真实物理依据。
+> 目的：记录板端音视频设备枚举结果，作为 V4L2、ALSA、RGA、MPP、RTMP/WebRTC/RTSP 开发与配置的真实物理依据。
 
 ---
 

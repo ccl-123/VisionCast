@@ -1,7 +1,7 @@
 /**
  * @file audio_encoder.h
  * @brief VisionCast 音频编码模块头文件
- * @details 负责将 S16_LE PCM 编码为 RTP/WebRTC 使用的 Opus 音频包。
+ * @details 负责将 S16_LE PCM 编码为 RTP/WebRTC/RTSP 使用的 Opus 音频包。
  */
 
 #pragma once
@@ -29,8 +29,8 @@ public:
     AudioEncoder(const AudioEncoder&) = delete;
     AudioEncoder& operator=(const AudioEncoder&) = delete;
 
-    // Encodes S16_LE PCM to Opus for RTP/WebRTC audio (dynamic RTP payload type 111).
-    // 将 S16_LE PCM 原始音频帧编码为 Opus，用于 RTP/WebRTC 音频传输。
+    // Encodes S16_LE PCM to Opus for RTP/WebRTC/RTSP audio.
+    // 将 S16_LE PCM 原始音频帧编码为 Opus，用于 RTP/WebRTC/RTSP 音频传输。
     EncodedPacket encode(const AudioFrame& frame, std::string& error);
 
 private:

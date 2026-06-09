@@ -15,7 +15,7 @@ V4L2 DQBUF bytesused JPEG
   -> MPP 解码输出 NV12 DRM buffer / DMA-BUF fd
   -> RGA 直通或 fd-to-fd resize
   -> MPP H.264/H.265 编码 EXT_DMA 输入
-  -> RTP / RTMP / WebRTC 封包发送
+  -> RTP / RTMP / WebRTC / RTSP 封包发送
 ```
 
 ## 2. 输入处理

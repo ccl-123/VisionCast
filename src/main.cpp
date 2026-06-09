@@ -5,11 +5,12 @@
  * 本文件是 VisionCast 系统的入口函数文件。主要负责：
  * 1. 命令行参数（CLI Options）的解析与校验。
  * 2. 从本地 JSON 配置文件加载全局系统配置，并支持通过命令行选项覆盖特定参数。
- * 3. 统一处理服务器 IP 模板替换（如将 RTMP/WebRTC 地址中的 `{server_ip}` 替换为实际 IP）。
+ * 3. 统一处理服务器 IP 模板替换（如将 RTMP/WebRTC/RTSP 地址中的 `{server_ip}` 替换为实际 IP）。
  * 4. 运行硬件设备探测（--probe）或启动音视频流水线引擎（PipelineManager::run_stream）。
  */
 
 #include <cstdlib>
+#include <cctype>
 #include <iostream>
 #include <exception>
 #include <optional>
@@ -31,9 +32,12 @@ void print_help(const char* program) {
         << "\n"
         << "Options:\n"
         << "  -c, --config <path>     Load config file (default: config/visioncast_config.json)\n"
-        << "      --protocol <mode>   Override stream protocol: rtp, rtmp or webrtc\n"
+        << "      --protocol <mode>   Override stream protocol: rtp, rtmp, webrtc or rtsp\n"
         << "      --rtmp-url <url>    Override RTMP push URL\n"
         << "      --webrtc-url <url>  Override WebRTC WHIP URL\n"
+        << "      --rtsp-url <url>    Override RTSP push URL\n"
+        << "      --rtsp-transport <udp|tcp>\n"
+        << "                          Override RTSP media transport\n"
         << "      --server-ip <ip>    Override RTP receiver IP\n"
         << "      --video-port <n>    Override RTP video port\n"
         << "      --audio-port <n>    Override RTP audio port\n"
@@ -66,6 +70,13 @@ bool parse_int(const std::string& text, int& value) {
     }
 }
 
+std::string lower_ascii(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -75,6 +86,8 @@ int main(int argc, char** argv) {
     std::optional<std::string> protocol_override;
     std::optional<std::string> rtmp_url_override;
     std::optional<std::string> webrtc_url_override;
+    std::optional<std::string> rtsp_url_override;
+    std::optional<std::string> rtsp_transport_override;
     std::optional<std::string> server_ip_override;
     std::optional<int> video_port_override;
     std::optional<int> audio_port_override;
@@ -101,8 +114,8 @@ int main(int argc, char** argv) {
         }
         // 处理各种推流参数的参数覆盖选项
         if (arg == "--protocol" || arg == "--rtmp-url" || arg == "--webrtc-url" ||
-            arg == "--server-ip" || arg == "--video-port" || arg == "--audio-port" ||
-            arg == "--sdp-path") {
+            arg == "--rtsp-url" || arg == "--rtsp-transport" || arg == "--server-ip" ||
+            arg == "--video-port" || arg == "--audio-port" || arg == "--sdp-path") {
             if (i + 1 >= argc) {
                 std::cerr << "missing value for " << arg << '\n';
                 return 1;
@@ -114,6 +127,10 @@ int main(int argc, char** argv) {
                 rtmp_url_override = value;
             } else if (arg == "--webrtc-url") {
                 webrtc_url_override = value;
+            } else if (arg == "--rtsp-url") {
+                rtsp_url_override = value;
+            } else if (arg == "--rtsp-transport") {
+                rtsp_transport_override = value;
             } else if (arg == "--server-ip") {
                 server_ip_override = value;
             } else if (arg == "--sdp-path") {
@@ -172,6 +189,10 @@ int main(int argc, char** argv) {
     if (protocol_override) config.stream.protocol = *protocol_override;
     if (rtmp_url_override) config.stream.rtmp_url = *rtmp_url_override;
     if (webrtc_url_override) config.stream.webrtc_url = *webrtc_url_override;
+    if (rtsp_url_override) config.stream.rtsp_url = *rtsp_url_override;
+    if (rtsp_transport_override) {
+        config.stream.rtsp_transport = lower_ascii(*rtsp_transport_override);
+    }
     if (server_ip_override) config.stream.server_ip = *server_ip_override;
     if (video_port_override) config.stream.video_port = *video_port_override;
     if (audio_port_override) config.stream.audio_port = *audio_port_override;
@@ -180,6 +201,7 @@ int main(int argc, char** argv) {
     // 统一用最终确定的 server_ip 替换 URL 中的占位符
     visioncast::replace_all(config.stream.rtmp_url, "{server_ip}", config.stream.server_ip);
     visioncast::replace_all(config.stream.webrtc_url, "{server_ip}", config.stream.server_ip);
+    visioncast::replace_all(config.stream.rtsp_url, "{server_ip}", config.stream.server_ip);
 
     if (!visioncast::validate_config(config, error)) {
         VC_LOG_ERROR("main", error);

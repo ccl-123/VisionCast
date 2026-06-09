@@ -186,7 +186,7 @@ echo "CXX:     $("${CXX}" --version | head -n1)"
 
 if [[ "${DO_BUILD}" == true ]]; then
     echo ""
-    echo "检查 FFmpeg 8.1.1 WHIP 依赖..."
+    echo "检查 FFmpeg 8.1.1 WHIP/RTSP 依赖..."
     "${ROOT_PWD}/scripts/build/deps/build_ffmpeg.sh"
 
     if [[ "${DO_CLEAN}" == true ]]; then

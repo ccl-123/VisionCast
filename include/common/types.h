@@ -45,7 +45,7 @@ struct VideoConfig {
  */
 struct AudioConfig {
     std::string device = "hw:1,0";              ///< ALSA 捕获设备名称，默认为 "hw:1,0"（声卡1，设备0）
-    int sample_rate = 48000;                    ///< 音频采样率；RTP/WebRTC Opus 支持 8000/12000/16000/24000/48000 Hz
+    int sample_rate = 48000;                    ///< 音频采样率；RTP/WebRTC/RTSP Opus 支持 8000/12000/16000/24000/48000 Hz
     int channels = 1;                           ///< 输出/推流声道数，1 表示单声道，2 表示双声道/立体声
     int capture_channels = 0;                   ///< ALSA 采集声道数；0 表示跟随 channels，可配置为 1 或 2
     std::string format = "S16_LE";              ///< ALSA 音频采样格式，默认为 Signed 16-bit Little Endian（有符号16位小端）
@@ -67,9 +67,11 @@ struct EncoderConfig {
  * @brief 流媒体传输与协议配置结构体。
  */
 struct StreamConfig {
-    std::string protocol = "rtp";               ///< 传输流协议，支持 "rtp" (UDP 单播/组播), "rtmp", "webrtc" (WHIP)
+    std::string protocol = "rtp";               ///< 传输流协议，支持 "rtp" (UDP 单播/组播), "rtmp", "webrtc" (WHIP), "rtsp"
     std::string rtmp_url = "rtmp://{server_ip}:1935/live/stream";      ///< RTMP 推流地址模板
     std::string webrtc_url = "http://{server_ip}:8889/live/stream/whip"; ///< WebRTC WHIP 推流服务器地址
+    std::string rtsp_url = "rtsp://{server_ip}:8554/live/stream";      ///< RTSP 推流服务器地址
+    std::string rtsp_transport = "udp";        ///< RTSP 媒体承载方式，支持 "udp" 或 "tcp"
     std::string server_ip = "192.168.190.128";  ///< 目标流媒体服务器 IP 地址，用于替换模板
     int video_port = 5004;                      ///< RTP 视频流输出端口
     int audio_port = 5006;                      ///< RTP 音频流输出端口

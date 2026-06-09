@@ -3,9 +3,9 @@
  * @brief VisionCast 音视频传输控制模块实现文件
  * 
  * 本文件实现了 AvTransport 类。它负责多路分发控制，包括以下逻辑：
- * 1. 解析系统流式协议配置（RTP/RTMP/WebRTC）。
- * 2. 调度 UDP 发送器、RTP 打包器、RTMP 推流器和 WebRTC 推流器的生命周期。
- * 3. RTP 和 WebRTC 共用 Opus 编码及 RTP 打包链路，RTMP 保持独立 AAC 编码。
+ * 1. 解析系统流式协议配置（RTP/RTMP/WebRTC/RTSP）。
+ * 2. 调度 UDP 发送器、RTP 打包器、RTMP/WebRTC/RTSP 推流器的生命周期。
+ * 3. RTP、WebRTC 和 RTSP 共用 Opus 编码链路，RTMP 保持独立 AAC 编码。
  * 4. 使用 std::lock_guard 对各种操作进行同步保护，确保线程安全。
  */
 
@@ -24,7 +24,12 @@ AvTransport::AvTransport(VisionCastConfig config)
       audio_rtp_(kOpusPayloadType, 0x56434131U),
       audio_encoder_(config_.audio.frame_ms),
       rtmp_(config_.stream.rtmp_url, config_.video, config_.audio, config_.encoder),
-      webrtc_(config_.stream.webrtc_url, config_.video, config_.audio, config_.encoder) {}
+      webrtc_(config_.stream.webrtc_url, config_.video, config_.audio, config_.encoder),
+      rtsp_(config_.stream.rtsp_url,
+            config_.stream.rtsp_transport,
+            config_.video,
+            config_.audio,
+            config_.encoder) {}
 
 AvTransport::~AvTransport() {
     close();
@@ -55,6 +60,11 @@ bool AvTransport::open(std::string& error) {
         if (!webrtc_.connect(error)) {
             return false;
         }
+    } else if (config_.stream.protocol == "rtsp") {
+        // 建立 RTSP 推流会话
+        if (!rtsp_.connect(error)) {
+            return false;
+        }
     } else {
         error = "unsupported stream protocol: " + config_.stream.protocol;
         return false;
@@ -71,6 +81,7 @@ void AvTransport::close() {
     audio_udp_.close();
     rtmp_.disconnect();
     webrtc_.disconnect();
+    rtsp_.disconnect();
     opened_ = false;
 }
 
@@ -95,9 +106,19 @@ bool AvTransport::send_video(const EncodedPacket& packet, std::string& error) {
     if (config_.stream.protocol == "webrtc") {
         return webrtc_.push_video(packet, error);
     }
+
+    // 3. RTSP 协议发送分支：通过 FFmpeg RTSP muxer 发布视频编码包
+    if (config_.stream.protocol == "rtsp") {
+        return rtsp_.push_video(packet, error);
+    }
     
-    // 3. RTMP 协议发送分支：将编码后的原始 H.264/H.265 帧推送至 RTMP 推流器
-    return rtmp_.push_video(packet, error);
+    // 4. RTMP 协议发送分支：将编码后的原始 H.264/H.265 帧推送至 RTMP 推流器
+    if (config_.stream.protocol == "rtmp") {
+        return rtmp_.push_video(packet, error);
+    }
+
+    error = "unsupported stream protocol: " + config_.stream.protocol;
+    return false;
 }
 
 bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
@@ -113,7 +134,7 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
             frame.pcm.data(), frame.pcm.size(), frame.pts_us, error);
     }
 
-    // 2. RTP 和 WebRTC 共用 Opus 编码及 RTP 打包。
+    // 2. RTP、WebRTC 和 RTSP 共用 Opus 编码。
     const EncodedPacket encoded = audio_encoder_.encode(frame, error);
     if (!error.empty()) {
         return false;
@@ -135,6 +156,11 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
     // 2.2 WebRTC 协议分支：通过 FFmpeg 官方原生 WHIP 推送 Opus 音频编码包
     if (config_.stream.protocol == "webrtc") {
         return webrtc_.push_audio(encoded, error);
+    }
+
+    // 2.3 RTSP 协议分支：通过 FFmpeg RTSP muxer 推送 Opus 音频编码包
+    if (config_.stream.protocol == "rtsp") {
+        return rtsp_.push_audio(encoded, error);
     }
     
     error = "unsupported stream protocol: " + config_.stream.protocol;
