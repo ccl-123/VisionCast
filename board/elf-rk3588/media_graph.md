@@ -1,4 +1,4 @@
-# ELF-RK3588 Media Graph 记录 (已完工版)
+# ELF-RK3588 Media Graph 记录
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588

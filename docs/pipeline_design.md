@@ -1,4 +1,4 @@
-# VisionCast 音视频管线设计 (已完工版)
+# VisionCast 音视频管线设计
 
 > 项目：VisionCast 智能眼镜音视频推流系统
 > 平台：ELF-RK3588

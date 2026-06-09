@@ -1,4 +1,4 @@
-# VisionCast 智能眼镜音视频推流系统 (已完工最终版)
+# VisionCast 智能眼镜音视频推流系统
 
 [![Platform](https://img.shields.io/badge/Platform-ELF--RK3588-blue.svg)](https://www.elfboard.com/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
