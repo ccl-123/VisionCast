@@ -59,3 +59,18 @@
 - **现象**：当 ELF-RK3588 上开启了图形桌面环境时，程序向 `/dev/fb0` (Framebuffer) 写入的像素直接被 X11/GNOME 窗口管理器的桌面覆盖，无法显示本地画面。
 - **原因**：桌面窗口系统的合成管理器 (Compositor) 独占了屏幕绘制权限，导致直接写显存被瞬间覆盖。
 - **已实现的解决办法**：在 `DisplayRenderer` 中实现了自适应的渲染后端。程序优先检测 X11 环境变量。在有桌面环境下，自动动态 dlopen `libX11.so.6` 并在一个独立的异步 X11 窗口中利用 RGA 加速渲染视频流；当在纯命令行环境（无 X11 图形界面）下，则自动退避到原有的 `/dev/fb0` Framebuffer 渲染逻辑中。预览由 `debug.enable_preview` 控制，编码成功后移动同帧 `VideoFrame` 到预览队列；DMA-only 主路径开启预览时通过 RGA fd 输入渲染，不需要把整帧 NV12 拷贝回用户态。X11/fb0 显示提交仍有转换和输出开销，不属于显示端到端零拷贝。
+
+---
+
+## 8. FFmpeg WHIP 升级后推流超时挂起与 DTLS 握手失败问题
+
+- **现象**：在使用内置升级后的 FFmpeg 8.1.1 运行 WebRTC (WHIP) 推流脚本时，程序在连接初期无限期挂起或报错，伴随有 `Handshake failed, r0=-1, r1=5` 和 `DTLS session failed` 的网络错误。
+- **原因**：
+  1. **HTTP 代理拦截**：开发板配置了 `http_proxy` 环境变量。FFmpeg HTTP 客户端由于不支持 CIDR (如 `192.168.137.0/24`) 的 `no_proxy` 过滤规则，将本地 WHIP 连接转给主机的 Clash 代理端口，导致 HTTP POST 挂起或返回 502。
+  2. **不可达 ICE 候选地址**：流媒体服务器主机开启了代理 TUN 网卡（IP为 `198.18.0.1`）。MediaMTX 将其作为首个候选地址发送给客户端。而 FFmpeg whip 封装器极简设计下仅支持单候选地址，盲目挑选第一个 candidate 进行绑定，导致板端向不可达的 `198.18.0.1` 发送 DTLS 握手，产生 `r1=5` (SSL_ERROR_SYSCALL) 错误。
+  3. **中断回调悬空指针**：为限制连接挂起时间，代码中在 `push_video` 栈上分配了 `CallbackOpaque` 并传递给 FFmpeg 注册为中断回调。当 `avformat_write_header` returned 后，该变量退栈被销毁，而底层的 `URLContext` 在后续发送媒体帧时仍以值拷贝保留了对该悬空指针的调用，导致异常超时退出。
+- **已实现的解决办法**：
+  1. **脚本代理清理**：在运行脚本 `run_13855_camera.sh` 和 `run_usb_camera.sh` 执行前一律 unset 代理环境变量，防止本地局域网流量被拦截。
+  2. **ICE 候选地址优先级过滤补丁**：修改 MediaMTX 服务端配置以只对外广播可达 IP 候选地址；并在 FFmpeg 编译期自动执行 `patch_whip.py` 脚本，补丁改写了 `whip.c`，使其在解析 SDP 答复时优先选择与 WHIP URL 宿主机 IP 完全相同的候选地址，实现复杂网卡拓扑自适应。
+  3. **堆分配生命周期锁定**：将连接超时结构体 `CallbackOpaque` 放置于堆上（`Impl` 的成员变量内），并在建连完成之后设置 `disabled` 标志位，确保即使 FFmpeg 协议栈底层重入回调，也不会发生非法内存访问或误判超时。
+

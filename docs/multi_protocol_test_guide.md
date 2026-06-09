@@ -9,7 +9,7 @@
 ### 1.1 部署运行环境
 在开始任何推流测试前，需要确保相关的运行库已就位：
 - 系统安装包已就位在 `install/visioncast/`。
-- 本地启动测试需配置 `LD_LIBRARY_PATH` 环境变量，以正确加载安装包目录下的 RGA、MPP、OpenSSL 以及 libdatachannel 等共享库。
+- 本地启动测试需配置 `LD_LIBRARY_PATH` 环境变量，以正确加载安装包目录下的 RGA、MPP、OpenSSL 以及 FFmpeg 等共享库。
 ```bash
 export LD_LIBRARY_PATH=/home/elf/open_project/VisionCast/install/visioncast/lib
 ```
@@ -65,9 +65,8 @@ MediaMTX 提供内置的 WebRTC 网页播放器。
 
 #### 2.1.3 核心技术保障点（故障排查参考）
 > [!IMPORTANT]
-> - **DTLS 握手超时问题解决**：在本地环回测试中，如果 SDP Offer 的 DTLS `setup` 角色为默认的 `actpass`，通常会导致 Pion (MediaMTX) 反馈 `setup:active` 要求服务器发起握手，但这在本地环回接口下可能会丢包或超时。
-> - **解决方案机制**：VisionCast 已在代码中实现 Offer 的 SDP 修改，强制将 `a=setup:actpass` 替换为 `a=setup:active`。这确保了客户端自身作为 DTLS 客户端发起 `ClientHello` 握手，使连接在数毫秒内建立，彻底消除了 "stream not found" 的挂起报错。
-> - **回环口绑定 (bindAddress)**：在回环测试时，`libdatachannel` 会自动解析并绑定到 `127.0.0.1` 物理回环，避免局域网广播风暴或防火墙路由拦截。
+> - **DTLS 握手超时与主动建连机制**：在 WebRTC/WHIP 规范中，DTLS 的协商角色 (`setup`) 由 SDP 协商确定。为了消除 Pion/MediaMTX 在特定网络拓扑下可能面临的主动建连握手丢失或超时风险，VisionCast 通过设置 FFmpeg 的 `whip_flags` 为 `dtls_active`，强制将推流端（客户端）指定为 DTLS 的 `active` 角色，确保客户端主动发送 `ClientHello` 以秒级（实际数毫秒）建立加密隧道，消除 "stream not found" 的挂起超时报错。
+> - **ICE 候选地址优先级过滤**：原生 FFmpeg WHIP 仅处理 SDP 答复中的首个 host candidate。若主机运行有 Clash/VPN 等软件，其 Tun 虚拟网卡 IP (如 198.18.0.1) 往往被排在第一位导致连接失败。VisionCast 已通过底层编译期补丁支持动态 IP 过滤，自动挑选并优先连接与 WHIP URL 宿主机 IP 完全相同的 candidate，彻底打通复杂路由环境下的建连信道。
 
 ---
 

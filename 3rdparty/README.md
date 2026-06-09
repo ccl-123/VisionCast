@@ -94,58 +94,37 @@
 
 主要头文件目录：
 
-- `ffmpeg/include/libavformat/`：FLV 封装、RTMP 网络输出和容器写入接口。
+- `ffmpeg/include/libavformat/`：FLV/RTMP 和原生 WHIP 封装、网络输出及容器写入接口。
 - `ffmpeg/include/libavcodec/`：AAC 编码器和编码包接口。
 - `ffmpeg/include/libavutil/`：帧、时间基、内存、采样格式等基础接口。
 - `ffmpeg/include/libswresample/`：S16_LE PCM 到 AAC 编码采样格式的转换。
 
 主要库文件：
 
-- `libavformat.so.58*`：把 H.264/AAC 封装为 FLV，并通过 RTMP URL 主动推流。
-- `libavcodec.so.58*`：将 ALSA 捕获的 PCM 音频编码为 AAC。
-- `libavutil.so.56*`：FFmpeg 公共数据结构、内存和时间工具。
-- `libswresample.so.3*`：音频采样格式转换。
+- `libavformat.so.62*`：FFmpeg 8.1.1 的 FLV/RTMP、RTP 和实验性 WHIP muxer。
+- `libavcodec.so.62*`：将 ALSA 捕获的 PCM 音频编码为 AAC，并提供 H.264/H.265 数据结构。
+- `libavutil.so.60*`：FFmpeg 公共数据结构、内存、加密辅助和时间工具。
+- `libswresample.so.6*`：音频采样格式转换。
+- `libssl.so.3`、`libcrypto.so.3`：FFmpeg DTLS/HTTPS 和 WHIP muxer 使用的 OpenSSL 运行库。
 
 项目用途：
 
 - `src/transport/rtmp_pusher.cpp` 从首个 H.264 关键帧提取 SPS/PPS，生成 AVCDecoderConfigurationRecord。
 - 视频以 H.264 写入 FLV，音频由 48 kHz S16_LE PCM 编码为 AAC 后写入同一 RTMP 流。
 - 默认推流地址为 `rtmp://192.168.137.1:1935/live/stream`。
+- 当前 WebRTC 发送代码已完全重构为使用 FFmpeg 8.1.1 原生 `whip` muxer，摒弃了旧版第三方 libdatachannel 库以降低包体积和内存开销。
 
 构建开关：
 
 - CMake 找到四组头文件和对应库文件后定义 `VISIONCAST_ENABLE_FFMPEG=1`。
-- 主程序通过 `dlopen()` 按需加载 FFmpeg；只有选择 RTMP 模式时才加载这些库，因此 UDP/RTSP 不会因 FFmpeg 间接依赖缺失而无法启动。
+- 执行 `scripts/build/build_ffmpeg.sh` 会交叉构建 FFmpeg 8.1.1，启用 FLV/RTMP、RTP、WHIP、DTLS 和 OpenSSL，并在验证 WHIP muxer 后更新本目录。
 
 运行时注意：
 
-- 本目录保存的是 VisionCast RTMP 后端直接调用的 FFmpeg 库；主程序不在 ELF 中直接链接它们，而是在 RTMP 模式启动时按 SONAME 动态加载。
-- Ubuntu 提供的 `libavformat.so.58` 和 `libavcodec.so.58` 还依赖 GnuTLS、XML2、压缩库及部分编解码库。目标板若没有这些间接依赖，RTMP 模式仍会加载失败。
-- 交叉安装会把四个直接调用的 FFmpeg 库复制到 `install/visioncast/lib/`，并由 `scripts/build/cross_build.sh` 递归收集其余非 glibc 基础运行库依赖。
+- 主程序直接链接本目录的 FFmpeg 8.1.1 共享库，运行脚本必须把 `install/visioncast/lib/` 放入 `LD_LIBRARY_PATH`。
+- 精简构建仅启用项目所需组件；WHIP 额外依赖 OpenSSL 3，安装阶段会一并复制对应运行库。
+- 交叉安装会把 FFmpeg 和 OpenSSL 库复制到 `install/visioncast/lib/`，并由 `scripts/build/cross_build.sh` 检查其余非 glibc 基础运行库依赖。
 
-## WebRTC libdatachannel
-
-主要文件：
-
-- `webrtc/include/rtc/rtc.hpp`：libdatachannel C++ API 主入口。
-- `webrtc/lib/aarch64/libdatachannel.so*`：WebRTC PeerConnection、ICE、DTLS、SRTP 运行库。
-- `webrtc/lib/aarch64/libssl.so.3`、`libcrypto.so.3`：libdatachannel 使用的 OpenSSL 运行库。
-
-项目用途：
-
-- `src/transport/webrtc_pusher.cpp` 创建 libdatachannel PeerConnection 和音视频 Track。
-- WHIP 信令通过 `webrtc_url` 发起 HTTP POST 交换 SDP answer。
-- 视频沿用项目 H.264 RTP packetizer，音频使用共享 Opus encoder 和 RTP packetizer，再交给 WebRTC Track 通过 DTLS/SRTP 发送。
-
-构建行为：
-
-- 执行 `scripts/build/build_webrtc_deps.sh` 可下载并交叉构建 libdatachannel v0.22，输出到本目录。
-- CMake 找到 `rtc/rtc.hpp` 和 `libdatachannel.so` 后定义 `VISIONCAST_ENABLE_WEBRTC=1`。
-- 交叉安装阶段复制 `libdatachannel.so*`、`libssl.so.3`、`libcrypto.so.3` 到 `install/visioncast/lib/`。
-
-运行时注意：
-
-- 当前 WHIP helper 支持明文 `http://` URL，默认值为 `http://192.168.137.1:8889/live/stream`。
 - HTTPS WHIP 需要额外实现 TLS HTTP 客户端，不在当前版本范围内。
 
 ## Opus
@@ -201,7 +180,7 @@
 
 - `lib/` 下的二进制均为 Linux aarch64，目标平台是 RK3588。
 - x86_64 主机不能直接加载这些 `.so` 文件。
-- 运行脚本设置 `LD_LIBRARY_PATH=<安装目录>/lib`，优先加载安装包中的 MPP、RGA、FFmpeg、JPEG、WebRTC、OpenSSL 和 ALSA 库。
+- 运行脚本设置 `LD_LIBRARY_PATH=<安装目录>/lib`，优先加载安装包中的 MPP、RGA、FFmpeg、JPEG、OpenSSL 和 ALSA 库。
 - 更新任一预编译库时，必须同时保留真实版本文件和 SONAME 链接，例如 `libavformat.so.58 -> libavformat.so.58.76.100`。
 
 ## 来源记录
@@ -209,6 +188,5 @@
 - MPP、RGA：来自 VisionCast 已通过交叉编译验证的 Rockchip SDK 头文件与 RK3588 aarch64 运行库；头文件和库必须保持版本兼容。
 - RTSP helper：来自 Firefly RK3588 SDK `external/common_algorithm/misc`。
 - FFmpeg、libjpeg-turbo、ALSA libasound、OpenSSL arm64 运行库：来自当前 Ubuntu 22.04 aarch64 交叉开发包。
-- WebRTC libdatachannel：由 `scripts/build/build_webrtc_deps.sh` 下载上游源码和固定子模块提交交叉构建。
 
 这些文件的许可证仍由各上游项目规定。发布产品前应核对对应版本的许可证和再分发要求。

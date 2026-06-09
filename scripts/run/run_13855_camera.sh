@@ -60,6 +60,9 @@ if [[ -z "${XAUTHORITY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
     done
 fi
 
+# 清理代理环境变量，防止本地推流流量被代理软件拦截导致 502/连接挂起
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+
 export LD_LIBRARY_PATH="${INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
 cd "${INSTALL_DIR}"
 exec "${BIN}" "${ARGS[@]}" "$@"

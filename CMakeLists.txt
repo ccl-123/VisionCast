@@ -105,6 +105,7 @@ if (VISIONCAST_TARGET_RK3588
     AND EXISTS "${AVUTIL_LIB}"
     AND EXISTS "${SWRESAMPLE_LIB}")
     target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_FFMPEG=1)
+    target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_WEBRTC=1)
     target_include_directories(visioncast SYSTEM PRIVATE ${FFMPEG_INC_DIR})
     target_link_libraries(visioncast PRIVATE
         ${AVFORMAT_LIB}
@@ -113,7 +114,7 @@ if (VISIONCAST_TARGET_RK3588
         ${SWRESAMPLE_LIB}
     )
 else()
-    message(WARNING "AArch64 FFmpeg development files were not found; RTMP mode will be disabled")
+    message(WARNING "AArch64 FFmpeg development files were not found; RTMP and WHIP modes will be disabled")
 endif()
 
 if (VISIONCAST_TARGET_RK3588 AND EXISTS "${RGA_INC_DIR}/im2d.h" AND EXISTS "${RGA_LIB}")
@@ -124,15 +125,7 @@ else()
     message(WARNING "Rockchip RGA headers/library were not found; software NV12 conversion will be used")
 endif()
 
-if (VISIONCAST_TARGET_RK3588
-    AND EXISTS "${WEBRTC_INC_DIR}/rtc/rtc.hpp"
-    AND EXISTS "${DATACHANNEL_LIB}")
-    target_compile_definitions(visioncast PRIVATE VISIONCAST_ENABLE_WEBRTC=1)
-    target_include_directories(visioncast SYSTEM PRIVATE ${WEBRTC_INC_DIR})
-    target_link_libraries(visioncast PRIVATE ${DATACHANNEL_LIB})
-else()
-    message(WARNING "libdatachannel WebRTC files were not found; WHIP mode will be disabled")
-endif()
+# WebRTC is now implemented using FFmpeg's native whip muxer, no longer requiring libdatachannel.
 
 if (VISIONCAST_TARGET_RK3588
     AND EXISTS "${OPUS_INC_DIR}/opus.h"
@@ -168,25 +161,6 @@ install(DIRECTORY scripts/run scripts/board DESTINATION scripts
 )
 install(PROGRAMS scripts/fix_freq_rk3588.sh DESTINATION scripts)
 
-if (EXISTS "${WEBRTC_LIB_DIR}")
-    install(DIRECTORY "${WEBRTC_LIB_DIR}/"
-        DESTINATION lib
-        FILES_MATCHING PATTERN "*datachannel.so*"
-    )
-endif()
-
-if (EXISTS "${OPUS_LIB_DIR}")
-    install(DIRECTORY "${OPUS_LIB_DIR}/"
-        DESTINATION lib
-        FILES_MATCHING PATTERN "libopus.so*"
-    )
-    install(FILES
-        "${THIRDPARTY_DIR}/opus/COPYING"
-        "${THIRDPARTY_DIR}/opus/README.md"
-        DESTINATION share/licenses/opus
-    )
-endif()
-
 if (EXISTS "${FFMPEG_LIB_DIR}")
     install(DIRECTORY "${FFMPEG_LIB_DIR}/"
         DESTINATION lib
@@ -197,3 +171,4 @@ if (EXISTS "${FFMPEG_LIB_DIR}")
             PATTERN "libswresample.so*"
     )
 endif()
+

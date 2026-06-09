@@ -26,6 +26,7 @@ namespace visioncast {
  */
 class WebRtcPusher {
 public:
+    struct Impl;                     ///< Pimpl 具体实现类，封装底层推流库逻辑
     WebRtcPusher(std::string whip_url, VideoConfig video, AudioConfig audio, EncoderConfig encoder);
     ~WebRtcPusher();
 
@@ -51,25 +52,22 @@ public:
     void disconnect();
 
     /**
-     * @brief 通过 WebRTC 视频通道（SRTP）推送 RTP 视频报文序列
-     * @param packets RTP 视频报文列表（FU-A 分片或单 NALU 报文）
+     * @brief 通过 WebRTC 视频通道（SRTP）推送视频编码包
+     * @param packet 视频编码数据包（H.264/H.265 Annex-B）
      * @param error 传入传出参数，用于返回发送失败时的错误信息
      * @return 成功发送返回 true，失败返回 false
      */
-    bool push_video_rtp(const std::vector<RtpPacket>& packets, std::string& error);
-    bool push_video_rtp_packet(const RtpPacket& packet, std::string& error);
+    bool push_video(const EncodedPacket& packet, std::string& error);
 
     /**
-     * @brief 通过 WebRTC 音频通道（SRTP）推送 RTP 音频报文序列
-     * @param packets RTP 音频报文列表
+     * @brief 通过 WebRTC 音频通道（SRTP）推送音频编码包
+     * @param packet 音频编码数据包（Opus）
      * @param error 传入传出参数，用于返回发送失败时的错误信息
      * @return 成功发送返回 true，失败返回 false
      */
-    bool push_audio_rtp(const std::vector<RtpPacket>& packets, std::string& error);
-    bool push_audio_rtp_packet(const RtpPacket& packet, std::string& error);
+    bool push_audio(const EncodedPacket& packet, std::string& error);
 
 private:
-    struct Impl;                     ///< Pimpl 具体实现类，封装具体的 WebRTC SDK（如 WebRTC 官方 SDK 或 libdatachannel 等）逻辑
     std::unique_ptr<Impl> impl_;      ///< 指向实现类的智能指针
     std::string whip_url_;            ///< WebRTC WHIP 的服务端 URL
     VideoConfig video_;               ///< 视频格式与编码属性配置

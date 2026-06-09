@@ -70,7 +70,7 @@ is_system_runtime_lib() {
         ld-linux-aarch64.so.1|libc.so.6|libpthread.so.0|libdl.so.2|librt.so.1|libm.so.6|libresolv.so.2|libnsl.so.1|libutil.so.1)
             return 0
             ;;
-        libasound.so*|libjpeg.so*|libssl.so*|libcrypto.so*|libopus.so*|librga.so*|librockchip_mpp.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libswresample.so*)
+        libasound.so*|libjpeg.so*|libssl.so*|libcrypto.so*|libopus.so*|librga.so*|librockchip_mpp.so*|libavcodec.so*|libavformat.so*|libavutil.so*|libswresample.so*|libdrm.so*|libgcc_s.so*|libstdc++.so*|libz.so*)
             return 0
             ;;
         *)
@@ -185,6 +185,10 @@ echo "INSTALL: ${PACKAGE_DIR}"
 echo "CXX:     $("${CXX}" --version | head -n1)"
 
 if [[ "${DO_BUILD}" == true ]]; then
+    echo ""
+    echo "检查 FFmpeg 8.1.1 WHIP 依赖..."
+    "${ROOT_PWD}/scripts/build/deps/build_ffmpeg.sh"
+
     if [[ "${DO_CLEAN}" == true ]]; then
         echo ""
         echo "正在清理构建和安装目录..."

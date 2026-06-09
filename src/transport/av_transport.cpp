@@ -91,11 +91,9 @@ bool AvTransport::send_video(const EncodedPacket& packet, std::string& error) {
         });
     }
     
-    // 2. WebRTC 协议发送分支：打包为 RTP 报文并通过 WebRTC 通道（SRTP）传输
+    // 2. WebRTC 协议发送分支：通过 FFmpeg 官方原生 WHIP 推送视频编码包
     if (config_.stream.protocol == "webrtc") {
-        return video_rtp_.packetize_each(packet, [this, &error](const RtpPacket& rtp) {
-            return webrtc_.push_video_rtp_packet(rtp, error);
-        });
+        return webrtc_.push_video(packet, error);
     }
     
     // 3. RTMP 协议发送分支：将编码后的原始 H.264/H.265 帧推送至 RTMP 推流器
@@ -134,11 +132,9 @@ bool AvTransport::send_audio(const AudioFrame& frame, std::string& error) {
         });
     }
     
-    // 2.2 WebRTC 协议分支：发送 RTP 封装好的 Opus 音频报文
+    // 2.2 WebRTC 协议分支：通过 FFmpeg 官方原生 WHIP 推送 Opus 音频编码包
     if (config_.stream.protocol == "webrtc") {
-        return audio_rtp_.packetize_each(encoded, [this, &error](const RtpPacket& rtp) {
-            return webrtc_.push_audio_rtp_packet(rtp, error);
-        });
+        return webrtc_.push_audio(encoded, error);
     }
     
     error = "unsupported stream protocol: " + config_.stream.protocol;

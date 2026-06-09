@@ -36,6 +36,10 @@ echo "BUILD:   ${BUILD_DIR}"
 echo "INSTALL: ${INSTALL_DIR}"
 echo "CXX:     $("${CXX}" --version | head -n1)"
 
+echo ""
+echo "检查 FFmpeg 8.1.1 WHIP 依赖..."
+"${ROOT_PWD}/scripts/build/deps/build_ffmpeg.sh"
+
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
