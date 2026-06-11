@@ -86,7 +86,7 @@
 - **采集节点**：已确认 13855 摄像头主通道采集节点为 `/dev/video11` (rkisp_mainpath)。
 - **视频能力**：支持 `V4L2_CAP_VIDEO_CAPTURE_MPLANE` (多平面视频采集能力)。
 - **输出格式**：输出 1280x720 30FPS 的 NV12 格式帧。
-- **采集模式**：V4L2 多平面 MMAP 缓冲出队，使用 `VIDIOC_EXPBUF` 导出 DMA-BUF fd，并用 `CLOCK_MONOTONIC` 单调时钟对出队瞬间打上采集时间戳。
+- **采集模式**：V4L2 多平面 MMAP 缓冲出队，使用 `VIDIOC_EXPBUF` 导出 DMA-BUF fd；帧 PTS 优先采用 V4L2 buffer 自带的 `CLOCK_MONOTONIC` 时间戳，驱动未提供 monotonic 时间戳时回退到用户态 `VIDIOC_DQBUF` 完成时刻。
 - **生命周期**：DMA-BUF 帧通过 `VideoFrame::dma.release` 归还 V4L2 buffer，避免硬件处理未结束时过早 `VIDIOC_QBUF`。
 
 ---
