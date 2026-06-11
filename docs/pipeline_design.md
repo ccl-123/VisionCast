@@ -122,7 +122,7 @@ MJPEG 解码的输入、输出、fallback 和性能日志字段见 [mjpeg_decode
 ## 8. 全管线时间戳与同步设计
 
 系统基于 `CLOCK_MONOTONIC` 单调微秒级时钟构建同步体系：
-1. **采集打标**：视频在 V4L2 驱动出队、音频在 ALSA 读出时瞬间打上原始时间戳。
+1. **采集打标**：视频优先使用 V4L2 buffer 自带的 `CLOCK_MONOTONIC` 时间戳，驱动未提供 monotonic 时间戳时回退到 `VIDIOC_DQBUF` 完成时刻；音频在 ALSA 读出后按实际返回采样帧数回推一个 buffer 时长，使 PTS 表示 PCM 第一个采样点时间。
 2. **时间戳传递**：原始帧在 RGA 转换、MJPEG 解码、MPP 编码和音频编码后，严格保留采集时的原始 PTS。
 3. **播放端同步**：封包和传输层使用同源 PTS 写入 RTP 或 WebRTC Header，保证播放端完美的音画同步。
 

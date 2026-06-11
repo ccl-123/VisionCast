@@ -51,13 +51,13 @@ pgrep -af visioncast
 
 | 字段 | 起止点 | 说明 |
 | --- | --- | --- |
-| `排队` | 采集 DQBUF 打点 -> 视频工作线程开始处理 | 反映 raw 队列等待。 |
+| `排队` | 视频帧 PTS -> 视频工作线程开始处理 | 反映 raw 队列等待；若驱动提供 monotonic buffer timestamp，该字段包含驱动帧时间戳到用户态出队的间隔。 |
 | `前处理` | `RgaProcessor::process()` 入口 -> 返回 | 包含 MJPEG 解码、RGA、直通判断和 CPU fallback。 |
 | `MJPEG` | `MjpegDecoder::decode()` 入口 -> 返回 | 仅 MJPEG 输入计入；13855 NV12 路径为 0。 |
 | `图像处理` | `前处理 - MJPEG` | 表示解码后的 RGA fd/VA、CPU 转换或直通开销。 |
 | `编码` | `MppEncoder::encode()` 入口 -> 返回 | 包含 MPP 输入导入、硬编码和 packet 取回。 |
 | `传输` | `AvTransport::send_video()` 入口 -> 返回 | 包含 RTP/RTMP/WebRTC/RTSP 本地封包和发送调用，不是远端网络延迟。 |
-| `总` | 采集 DQBUF 打点 -> `send_video()` 返回 | 本地端到发送完成的总延迟。 |
+| `总` | 视频帧 PTS -> `send_video()` 返回 | 本地端到发送完成的总延迟；使用 V4L2 monotonic timestamp 时更接近真实采集到发送完成时间。 |
 
 ## 4. 当前视频链路状态
 
